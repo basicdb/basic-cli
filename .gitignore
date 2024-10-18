@@ -3,4 +3,5 @@ dist/
 **/basic.config.ts
 **/basic.config.js
 
+.env
 
