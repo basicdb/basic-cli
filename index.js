@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
 
@@ -30,21 +30,20 @@ if (!fs.existsSync(binary)) {
   process.exit(1);
 }
 
-console.log(`Attempting to execute binary: ${binary}`);
-console.log(`Arguments: ${process.argv.slice(2).join(' ')}`);
 
-execFile(binary, process.argv.slice(2), { encoding: 'utf8' }, (error, stdout, stderr) => {
-  if (error) {
-    console.error(`Error executing binary: ${error.message}`);
-    console.error(`Command: ${binary} ${process.argv.slice(2).join(' ')}`);
-    console.error(`Exit code: ${error.code}`);
-    if (stderr) {
-      console.error(`stderr: ${stderr}`);
-    }
-    if (stdout) {
-      console.error(`stdout: ${stdout}`);
-    }
-    process.exit(1);
+const sourcePath = binary
+const destPath = path.join(__dirname, 'bin', 'basic-cli');
+
+try {
+  // Ensure the bin directory exists
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  
+  fs.copyFileSync(sourcePath, destPath);
+  if (os.platform() !== 'win32') {
+    execSync(`chmod +x ${destPath}`);
   }
-  console.log(stdout);
-});
+  console.log(`Installed the ${os.platform()} binary.`);
+} catch (error) {
+  console.error('Error during post-install script:', error);
+  process.exit(1);
+}

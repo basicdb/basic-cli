@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -31,6 +32,12 @@ var (
 	red    = lipgloss.AdaptiveColor{Light: "#FE5F86", Dark: "#FE5F86"}
 	indigo = lipgloss.AdaptiveColor{Light: "#5A56E0", Dark: "#7571F9"}
 	green  = lipgloss.AdaptiveColor{Light: "#02BA84", Dark: "#02BF87"}
+)
+
+// Update the constants for the directory and file name
+const (
+	basicCliDirName = ".basic-cli"
+	tokenFileName   = "token.json"
 )
 
 type Styles struct {
@@ -470,7 +477,7 @@ func init() {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: basic <command> [arguments]")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	command := os.Args[1]
@@ -877,37 +884,55 @@ func getKeyring() (keyring.Keyring, error) {
 	})
 }
 
-func saveToken(token *oauth2.Token) error {
-	ring, err := getKeyring()
+// Add a helper function to get the token file path
+func getTokenFilePath() (string, error) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return "", err
 	}
+	basicCliDir := filepath.Join(homeDir, basicCliDirName)
+	return filepath.Join(basicCliDir, tokenFileName), nil
+}
 
+// Update the saveToken function
+func saveToken(token *oauth2.Token) error {
 	customToken := &CustomToken{Token: *token}
 	tokenJSON, err := json.Marshal(customToken)
 	if err != nil {
 		return err
 	}
 
-	return ring.Set(keyring.Item{
-		Key:  tokenKey,
-		Data: tokenJSON,
-	})
+	tokenFilePath, err := getTokenFilePath()
+	if err != nil {
+		return err
+	}
+
+	// Create the .basic-cli directory if it doesn't exist
+	dir := filepath.Dir(tokenFilePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	return os.WriteFile(tokenFilePath, tokenJSON, 0600)
 }
 
+// Update the loadToken function
 func loadToken() (*oauth2.Token, error) {
-	ring, err := getKeyring()
+	tokenFilePath, err := getTokenFilePath()
 	if err != nil {
 		return nil, err
 	}
 
-	item, err := ring.Get(tokenKey)
+	tokenData, err := os.ReadFile(tokenFilePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No token file exists
+		}
 		return nil, err
 	}
 
 	var customToken CustomToken
-	err = json.Unmarshal(item.Data, &customToken)
+	err = json.Unmarshal(tokenData, &customToken)
 	if err != nil {
 		return nil, err
 	}
@@ -931,13 +956,18 @@ func loadToken() (*oauth2.Token, error) {
 	return &customToken.Token, nil
 }
 
+// Update the deleteToken function
 func deleteToken() error {
-	ring, err := getKeyring()
+	tokenFilePath, err := getTokenFilePath()
 	if err != nil {
 		return err
 	}
 
-	return ring.Remove(tokenKey)
+	err = os.Remove(tokenFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func refreshToken(token *oauth2.Token) (*oauth2.Token, error) {

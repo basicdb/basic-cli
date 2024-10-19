@@ -1,19 +1,20 @@
 {
   "name": "@basictech/cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "basictech cli for creating & managing your projects",
   "main": "index.js",
-  "bin": {
-    "basic": "./index.js"
-  },
   "files": [
     "dist",
     "index.js"
   ],
+  "bin": {
+    "basic": "./bin/basic-cli"
+  },
   "scripts": {
     "postinstall": "node ./index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "raz@basic.tech",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {}
 }
