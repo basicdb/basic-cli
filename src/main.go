@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/huh"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/oauth2"
@@ -58,7 +59,23 @@ export const config = {
   name: "%s",
   project_id: "%s"
 };
-`, name, projectID)
+
+export const schema = { 
+	project_id: "%s", 
+	version: 0,
+	tables: {	
+		example: {
+			name: 'example',
+			type: 'collection',
+			fields: {
+				value: {
+					type: 'string',
+				},
+			}
+		},
+  }
+}
+`, name, projectID, projectID)
 
 	var filename string
 	if option == "typescript" {
@@ -202,6 +219,10 @@ type errorMsg struct {
 	err error
 }
 
+type errorScreenMsg struct {
+	errorMessage string
+}
+
 type formSuccessMsg struct {
 	projectName string
 	projectID   string
@@ -250,6 +271,10 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = "error"
 		m.errorMessage = msg.err.Error()
 		return m, nil
+	case errorScreenMsg:
+		m.screen = "error_screen"
+		m.errorMessage = msg.errorMessage
+		return m, tea.Quit
 	case formSuccessMsg:
 		m.screen = "success"
 		m.projectName = msg.projectName
@@ -298,6 +323,18 @@ func (m FormModel) View() string {
 		return s.Status.Margin(0, 1).Padding(1, 2).Width(48).Render(b.String()) + "\n\n"
 	case "error":
 		return s.ErrorHeaderText.Render("Error: " + m.errorMessage)
+	case "error_screen":
+		var b strings.Builder
+		fmt.Fprintf(&b, "An error occurred:\n\n")
+		fmt.Fprintf(&b, "%s\n\n", m.errorMessage)
+		fmt.Fprintf(&b, "\nPlease try again or contact support if the issue persists.")
+		return s.Status.
+			Foreground(lipgloss.Color("#ff0000")).
+			Margin(0, 1).
+			Padding(1, 2).
+			Width(48).
+			Render(b.String()) + "\n\n"
+
 	default:
 		var projectName string
 		if m.form.GetString("name") != "" {
@@ -433,11 +470,12 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 var loggedInUser string
 
 type model struct {
-	choice  string
-	form    *huh.Form
-	state   programState
-	loading bool
-	spinner spinner.Model
+	choice       string
+	form         *huh.Form
+	state        programState
+	loading      bool
+	spinner      spinner.Model
+	errorMessage string
 }
 
 type programState int
@@ -445,6 +483,7 @@ type programState int
 const (
 	stateChoosing programState = iota
 	stateSuccess
+	stateError
 )
 
 var (
@@ -524,11 +563,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return displayProjects(msg.projects)
+		case errorScreenMsg:
+			m.state = stateError
+			m.errorMessage = msg.errorMessage
+			return m, tea.Quit
 		}
 
 		switch m.choice {
 		case "hi":
-			fmt.Printf("Hello cutie :)\n")
+			fmt.Printf("hi bestie :)\n")
 			return m, tea.Quit
 		case "help":
 			return m, tea.Quit
@@ -550,6 +593,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return getProjectsMsg(token)
 			}
 		case "init":
+			// Check if config file already exists
+			_, err := loadToken()
+			if err != nil {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: "not logged in. please login with 'basic login'"}
+				}
+			}
+
+			if _, err := os.Stat("basic.config.ts"); err == nil {
+				return m, func() tea.Msg {
+					m.state = stateError
+					return errorScreenMsg{errorMessage: "basic.config.ts already exists in this directory"}
+				}
+			}
+			if _, err := os.Stat("basic.config.js"); err == nil {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: "basic.config.js already exists in this directory"}
+				}
+			}
+
 			return NewFormModel(), func() tea.Msg {
 				return projectFormMsg{projectName: "test"}
 			}
@@ -570,6 +633,47 @@ type projectFormMsg struct {
 }
 
 type successMsg string
+
+// ----- VIEW ----------- //
+
+func (m model) View() string {
+	switch m.state {
+	case stateChoosing:
+		if m.loading {
+			return fmt.Sprintf("%s Loading...", m.spinner.View())
+		}
+	case stateError:
+		var b strings.Builder
+		fmt.Fprintf(&b, "An error occurred:\n\n")
+		fmt.Fprintf(&b, "%s\n\n", m.errorMessage)
+		fmt.Fprintf(&b, "\nPlease try again or contact support if the issue persists.")
+		return b.String()
+
+		// return m.errorMessage
+	}
+	if m.form != nil {
+		return m.form.View()
+	}
+
+	if m.choice == "help" {
+		var b string
+		b += "Usage: basic <command> [arguments]\n\n"
+		b += "Commands:\n"
+		b += "  account - Show account information\n"
+		b += "  login - login with your basic account\n"
+		b += "  logout - logout from your basic account\n"
+		b += "  status - Show login status\n"
+		b += "  projects - list your projects\n"
+		b += "  init - Create a new project\n"
+
+		return b
+	}
+	if m.choice == "logo" {
+		return printLogo()
+	}
+
+	return ""
+}
 
 // ------- list projects table ----------- //
 
@@ -623,6 +727,13 @@ func (m projectTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
+		case "c":
+			selectedRow := m.table.SelectedRow()
+			if len(selectedRow) > 0 {
+				projectID := selectedRow[0]
+				clipboard.WriteAll(projectID)
+				fmt.Println("Project ID copied to clipboard.")
+			}
 		}
 	}
 	m.table, cmd = m.table.Update(msg)
@@ -631,39 +742,6 @@ func (m projectTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m projectTableModel) View() string {
 	return "\n" + m.table.View() + "\n\nPress q to quit.\n"
-}
-
-// ----- VIEW ----------- //
-
-func (m model) View() string {
-	switch m.state {
-	case stateChoosing:
-		if m.loading {
-			return fmt.Sprintf("%s Loading...", m.spinner.View())
-		}
-	}
-	if m.form != nil {
-		return m.form.View()
-	}
-
-	if m.choice == "help" {
-		var b string
-		b += "Usage: basic <command> [arguments]\n\n"
-		b += "Commands:\n"
-		b += "  account - Show account information\n"
-		b += "  login - login with your basic account\n"
-		b += "  logout - logout from your basic account\n"
-		b += "  status - Show login status\n"
-		b += "  projects - list your projects\n"
-		b += "  init - Create a new project\n"
-
-		return b
-	}
-	if m.choice == "logo" {
-		return printLogo()
-	}
-
-	return ""
 }
 
 // ----------------------------- //
