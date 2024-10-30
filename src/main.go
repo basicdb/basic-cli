@@ -484,6 +484,7 @@ type model struct {
 	loading      bool
 	spinner      spinner.Model
 	errorMessage string
+	suggestions  []string
 }
 
 type programState int
@@ -492,6 +493,7 @@ const (
 	stateChoosing programState = iota
 	stateSuccess
 	stateError
+	stateUnknown
 )
 
 var (
@@ -629,10 +631,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Printf("Basic CLI config directory: %s\n", configDir)
 			return m, tea.Quit
 		case "version":
-
 			return m, tea.Quit
 		default:
-			fmt.Printf("Unknown command: %s\n. use command 'basic help' to see all commands", m.choice)
+			suggestions := findSimilarCommands(m.choice)
+			m.state = stateUnknown
+			m.suggestions = suggestions
 			return m, tea.Quit
 		}
 	case stateSuccess:
@@ -665,7 +668,22 @@ func (m model) View() string {
 		return b.String()
 
 		// return m.errorMessage
+	case stateUnknown:
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "Unknown command: %s\n\n", m.choice)
+		if len(m.suggestions) > 0 {
+			fmt.Fprintf(&b, "Did you mean:\n")
+			for _, suggestion := range m.suggestions {
+				fmt.Fprintf(&b, "  - %s\n", suggestion)
+			}
+		}
+
+		b.WriteString("\nUse 'basic help' to see all commands.\n")
+		return b.String()
+
 	}
+
 	if m.form != nil {
 		return m.form.View()
 	}
@@ -699,6 +717,7 @@ func (m model) View() string {
 
 		return b
 	}
+
 	if m.choice == "logo" {
 		return printLogo()
 	}
@@ -1204,5 +1223,87 @@ func generateSlugFromName(name string) string {
 
 func printLogo() string {
 	// show ascii logo :D
-	return ``
+	return `
+    ____            _     
+   |  _ \          (_)    
+   | |_) | __ _ ___ _  ___ 
+   |  _ < / _' / __| |/ __|
+   | |_) | (_| \__ \ | (__ 
+   |____/ \__,_|___/_|\___|
+                          
+   `
+}
+
+// Add this after the existing constants
+const (
+	// Minimum similarity score to consider a command as a suggestion
+	similarityThreshold = 0.4
+)
+
+// Add these new commands slice and helper functions
+var commands = []string{
+	"account",
+	"login",
+	"logout",
+	"status",
+	"projects",
+	"init",
+	"version",
+	"config",
+	"help",
+}
+
+// Calculate similarity between two strings using Levenshtein distance
+func similarity(s1, s2 string) float64 {
+	d := levenshteinDistance(s1, s2)
+	maxLen := float64(max(len(s1), len(s2)))
+	if maxLen == 0 {
+		return 1.0
+	}
+	return 1.0 - float64(d)/maxLen
+}
+
+func levenshteinDistance(s1, s2 string) int {
+	if len(s1) == 0 {
+		return len(s2)
+	}
+	if len(s2) == 0 {
+		return len(s1)
+	}
+
+	matrix := make([][]int, len(s1)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(s2)+1)
+		matrix[i][0] = i
+	}
+	for j := range matrix[0] {
+		matrix[0][j] = j
+	}
+
+	for i := 1; i <= len(s1); i++ {
+		for j := 1; j <= len(s2); j++ {
+			cost := 1
+			if s1[i-1] == s2[j-1] {
+				cost = 0
+			}
+			matrix[i][j] = min(
+				matrix[i-1][j]+1,
+				min(
+					matrix[i][j-1]+1,
+					matrix[i-1][j-1]+cost,
+				),
+			)
+		}
+	}
+	return matrix[len(s1)][len(s2)]
+}
+
+func findSimilarCommands(input string) []string {
+	var suggestions []string
+	for _, cmd := range commands {
+		if sim := similarity(input, cmd); sim >= similarityThreshold {
+			suggestions = append(suggestions, cmd)
+		}
+	}
+	return suggestions
 }
