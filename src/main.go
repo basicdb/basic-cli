@@ -39,6 +39,7 @@ var (
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
+	version         = "0.0.3"
 )
 
 type Styles struct {
@@ -616,6 +617,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return NewFormModel(), func() tea.Msg {
 				return projectFormMsg{projectName: "test"}
 			}
+		case "config":
+			configDir := filepath.Join(os.Getenv("HOME"), basicCliDirName)
+			fmt.Printf("Basic CLI config directory: %s\n", configDir)
+			return m, tea.Quit
+		case "version":
+
+			return m, tea.Quit
 		default:
 			fmt.Printf("Unknown command: %s\n. use command 'basic help' to see all commands", m.choice)
 			return m, tea.Quit
@@ -655,6 +663,20 @@ func (m model) View() string {
 		return m.form.View()
 	}
 
+	if m.choice == "version" {
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("basic-cli version %s\n", version))
+		latestVersion, err := checkLatestRelease()
+		if err != nil {
+			b.WriteString("\nOopsy - could not check if new version is available.\n")
+		} else if latestVersion != version {
+			b.WriteString(fmt.Sprintf("New version available: %s\n \nPlease update with 'npm update -g @basictech/cli'\n", latestVersion))
+		} else {
+			b.WriteString("You are running the latest version!\n")
+		}
+		return b.String()
+	}
+
 	if m.choice == "help" {
 		var b string
 		b += "Usage: basic <command> [arguments]\n\n"
@@ -665,6 +687,8 @@ func (m model) View() string {
 		b += "  status - Show login status\n"
 		b += "  projects - list your projects\n"
 		b += "  init - Create a new project\n"
+		b += "  version - Show CLI version\n"
+		b += "  config - Show Basic config directory location\n"
 
 		return b
 	}
@@ -673,6 +697,30 @@ func (m model) View() string {
 	}
 
 	return ""
+}
+
+func checkLatestRelease() (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/basicdb/basic-cli/releases/latest")
+	if err != nil {
+		return "", fmt.Errorf("error checking for updates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("received non-200 response checking releases: %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("error parsing release info: %w", err)
+	}
+
+	// Strip 'v' prefix if present
+	version := strings.TrimPrefix(release.TagName, "v")
+	return version, nil
 }
 
 // ------- list projects table ----------- //
