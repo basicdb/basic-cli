@@ -148,6 +148,10 @@ func NewFormModel() FormModel {
 	m.lg = lipgloss.DefaultRenderer()
 	m.styles = NewStyles(m.lg)
 
+	// Create custom keymap
+	keyMap := huh.NewDefaultKeyMap()
+	keyMap.Quit.SetKeys("esc", "ctrl+c")
+
 	m.form = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -180,7 +184,9 @@ func NewFormModel() FormModel {
 	).
 		WithWidth(45).
 		WithShowHelp(false).
-		WithShowErrors(false)
+		WithShowErrors(false).
+		WithKeyMap(keyMap)
+
 	m.form.Init()
 	return m
 }
@@ -235,7 +241,7 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = min(msg.Width, maxWidth) - m.styles.Base.GetHorizontalFrameSize()
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc", "ctrl+c", "q":
+		case "esc", "ctrl+c":
 			return m, tea.Quit
 		}
 	case formSubmittedMsg:
@@ -372,7 +378,8 @@ func (m FormModel) View() string {
 		}
 		body := lipgloss.JoinHorizontal(lipgloss.Top, form, status)
 
-		footer := m.appBoundaryView(m.form.Help().ShortHelpView(m.form.KeyBinds()))
+		footer := m.appBoundaryView(m.form.Help().ShortHelpView(m.form.KeyBinds()) + " • esc to quit")
+
 		if len(errors) > 0 {
 			footer = m.appErrorBoundaryView("")
 		}
@@ -551,7 +558,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
-			case "q", "ctrl+c", "esc":
+			case "ctrl+c", "esc":
 				return m, tea.Quit
 			}
 		case spinner.TickMsg:
@@ -761,35 +768,83 @@ func displayProjects(projects []project) (tea.Model, tea.Cmd) {
 }
 
 type projectTableModel struct {
-	table table.Model
+	table             table.Model
+	notification      string
+	notificationTimer *time.Timer
 }
 
 func (m projectTableModel) Init() tea.Cmd {
 	return nil
 }
 
+type tableNotificationMsg struct {
+	message string
+}
+
+type clearNotificationMsg struct{}
+
 func (m projectTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "ctrl+c", "esc":
 			return m, tea.Quit
+		case "up", "down":
+			m.notification = ""
 		case "c":
 			selectedRow := m.table.SelectedRow()
 			if len(selectedRow) > 0 {
 				projectID := selectedRow[0]
+				projectName := selectedRow[1]
 				clipboard.WriteAll(projectID)
-				fmt.Println("Project ID copied to clipboard.")
+				m.notification = fmt.Sprintf("%s: project_id copied to clipboard!", projectName)
+
+				if m.notificationTimer != nil {
+					m.notificationTimer.Stop()
+				}
+
+				m.notificationTimer = time.NewTimer(5 * time.Second)
+				return m, tea.Batch(
+					cmd,
+					func() tea.Msg {
+						<-m.notificationTimer.C
+						return clearNotificationMsg{}
+					},
+				)
+			}
+
+		case "o":
+			selectedRow := m.table.SelectedRow()
+			if len(selectedRow) > 0 {
+				projectID := selectedRow[0]
+				openBrowser("https://app.basic.tech/project/" + projectID)
 			}
 		}
+	case clearNotificationMsg:
+		m.notification = ""
 	}
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
 }
 
 func (m projectTableModel) View() string {
-	return "\n" + m.table.View() + "\n\nPress q to quit.\n"
+	notification := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("57")).
+		Render(m.notification)
+
+	help := "\n \n" +
+		notification +
+		"\n'c' to copy project ID" +
+		" • 'o' to open project in browser" +
+		"\n↑/↓ to navigate" +
+		" • esc to quit"
+
+	help = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render(help)
+
+	return "\n" + m.table.View() + "\n\n" + help
 }
 
 // ----------------------------- //
