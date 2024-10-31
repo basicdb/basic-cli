@@ -508,6 +508,7 @@ const (
 )
 
 func init() {
+	// TODO: add scopes
 	// Initialize OAuth2 config
 	oauthConfig = &oauth2.Config{
 		ClientID:     "9c3f6704-87e7-4af9-8dd0-36dcb9b5c18c",
@@ -525,7 +526,7 @@ func init() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: basic <command> [arguments]")
+		fmt.Println("welcome to basic-cli! use 'basic help' to see all commands")
 		os.Exit(0)
 	}
 
@@ -626,9 +627,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return NewFormModel(), func() tea.Msg {
 				return projectFormMsg{projectName: "test"}
 			}
-		case "config":
+		case "debug":
 			configDir := filepath.Join(os.Getenv("HOME"), basicCliDirName)
 			fmt.Printf("Basic CLI config directory: %s\n", configDir)
+			return m, tea.Quit
+		case "update":
+			cmd := exec.Command("npm", "update", "-g", "@basictech/cli")
+			_, err := cmd.CombinedOutput()
+			if err != nil {
+				fmt.Printf("Error updating CLI: %v\n", err)
+			} else {
+				fmt.Println("Update successful!")
+			}
 			return m, tea.Quit
 		case "version":
 			return m, tea.Quit
@@ -713,7 +723,8 @@ func (m model) View() string {
 		b += "  projects - list your projects\n"
 		b += "  init - Create a new project\n"
 		b += "  version - Show CLI version\n"
-		b += "  config - Show Basic config directory location\n"
+		b += "  update - Update CLI to the latest version\n"
+		b += "  debug - Show Basic config directory location\n"
 
 		return b
 	}
