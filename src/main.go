@@ -39,7 +39,7 @@ var (
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
-	version         = "0.0.5"
+	version         = "0.0.6"
 )
 
 type Styles struct {
@@ -794,10 +794,6 @@ type projectTableModel struct {
 
 func (m projectTableModel) Init() tea.Cmd {
 	return nil
-}
-
-type tableNotificationMsg struct {
-	message string
 }
 
 type clearNotificationMsg struct{}
