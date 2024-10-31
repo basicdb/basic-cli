@@ -1005,12 +1005,16 @@ func handleCallback(server *http.Server) http.HandlerFunc {
 			return
 		}
 
-		loggedInUser = "Authenticated User" // You might want to get the actual user info here
+		loggedInUser = "Authenticated User" // save user info
 
-		w.Write([]byte("Authentication successful! You can close this window."))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+		html := getHtmlPage()
+
+		w.Write([]byte(html))
 
 		go func() {
-			time.Sleep(2 * time.Second) // Give the browser time to receive the response
+			time.Sleep(2 * time.Second)
 			server.Shutdown(context.Background())
 			authDone <- true
 		}()
@@ -1306,4 +1310,123 @@ func findSimilarCommands(input string) []string {
 		}
 	}
 	return suggestions
+}
+
+func getHtmlPage() string {
+	return `
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<meta charset="UTF-8">
+			<title>Basic CLI Authentication</title>
+			<style>
+				:root {
+					color-scheme: light dark;
+				}
+
+				@media (prefers-color-scheme: light) {
+					:root {
+						--bg-color: #f5f5f5;
+						--container-bg: #ffffff;
+						--text-color: #000000;
+						--shadow: 0 2px 4px rgba(0,0,0,0.1);
+					}
+				}
+
+				@media (prefers-color-scheme: dark) {
+					:root {
+						--bg-color: #1a1a1a;
+						--container-bg: #2d2d2d;
+						--text-color: #ffffff;
+						--shadow: 0 2px 4px rgba(0,0,0,0.3);
+					}
+				}
+
+				body {
+					font-family: monospace;
+					display: flex;
+					justify-content: center;
+					align-items: center;
+					height: 100vh;
+					margin: 0;
+					background-color: var(--bg-color);
+					color: var(--text-color);
+				}
+
+				.container {
+					text-align: center;
+					padding: 2rem;
+					background: var(--container-bg);
+					border-radius: 8px;
+					box-shadow: var(--shadow);
+				}
+
+				.success-icon {
+					color: #AE87FF;
+					font-size: 32px;
+					margin-bottom: 1rem;
+				}
+
+				h2 {
+					margin: 0 0 1rem 0;
+				}
+
+				p {
+					margin: 0;
+					opacity: 0.8;
+				}
+
+				.help-text {
+					margin-top: 1.5rem;
+					font-size: 0.9em;
+					opacity: 0.7;
+					text-align: left;
+				}
+
+				.help-text ol {
+					margin: 0;
+					padding-left: 1.5rem;
+				}
+
+				.help-text li {
+					margin: 0.3rem 0;
+				}
+
+				 code {
+					background: var(--bg-color);
+					padding: 0.2em 0.4em;
+					border-radius: 4px;
+					font-family: monospace;
+					font-size: 0.9em;
+				}
+
+				a {
+					color: #AE87FF;
+					text-decoration: none;
+				}
+
+				a:hover {
+					text-decoration: underline;
+				}
+			</style>
+		</head>
+		<body>
+			<div class="container">
+				<div class="success-icon">✅</div>
+				<h2>Authentication Successful!</h2>
+				<p>You can close this window and return to the CLI.</p>
+				<div class="help-text">
+					<ol>
+						<li>Use command <code>basic help</code> to get started with the CLI</li>
+						<li>Visit the <a href="https://docs.basic.tech" target="_blank">Basic docs</a> for more info</li>
+					</ol>
+				</div>
+			</div>
+			<script>
+				setTimeout(() => window.close(), 3000);
+			</script>
+		</body>
+		</html>
+		
+	`
 }
