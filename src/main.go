@@ -556,6 +556,11 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
+const (
+	offlineMessage   = "You are offline. Please check your internet connection."
+	loggedOutMessage = "You are not logged in. Please login with 'basic login'"
+)
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.state {
@@ -589,8 +594,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "help":
 			return m, tea.Quit
 		case "account":
+			if !isOnline() {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: offlineMessage}
+				}
+			}
 			return m, performAccount
 		case "login":
+			if !isOnline() {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: offlineMessage}
+				}
+			}
 			return m, performLogin
 		case "logout":
 			return m, performLogout
@@ -598,19 +613,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			return m, checkStatus
 		case "projects":
+			if !isOnline() {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: offlineMessage}
+				}
+			}
+
 			return m, func() tea.Msg {
 				token, err := loadToken()
 				if err != nil {
-					return projectsMsg{err: fmt.Errorf("not logged in. please login with 'basic login'")}
+					return projectsMsg{err: fmt.Errorf(loggedOutMessage)}
 				}
 				return getProjectsMsg(token)
 			}
 		case "init":
+			if !isOnline() {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: offlineMessage}
+				}
+			}
 			// Check if config file already exists
 			_, err := loadToken()
 			if err != nil {
 				return m, func() tea.Msg {
-					return errorScreenMsg{errorMessage: "not logged in. please login with 'basic login'"}
+					return errorScreenMsg{errorMessage: loggedOutMessage}
 				}
 			}
 
@@ -634,6 +660,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Printf("Basic CLI config directory: %s\n", configDir)
 			return m, tea.Quit
 		case "update":
+			if !isOnline() {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: offlineMessage}
+				}
+			}
+			latestVersion, latestErr := checkLatestRelease()
+			if latestErr != nil {
+				fmt.Printf("Oopsy - error checking for updates: %v\n", latestErr)
+				return m, tea.Quit
+			} else if latestVersion == version {
+				fmt.Printf("You are already running the latest version!\n")
+				return m, tea.Quit
+			}
+
 			cmd := exec.Command("npm", "update", "-g", "@basictech/cli")
 			_, err := cmd.CombinedOutput()
 			if err != nil {
@@ -662,6 +702,11 @@ type projectFormMsg struct {
 	projectName string
 }
 
+func isOnline() bool {
+	_, err := http.Get("https://api.basic.tech/")
+	return err == nil
+}
+
 // ----- VIEW ----------- //
 
 func (m model) View() string {
@@ -674,7 +719,7 @@ func (m model) View() string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "An error occurred:\n\n")
 		fmt.Fprintf(&b, "%s\n\n", m.errorMessage)
-		fmt.Fprintf(&b, "\nPlease try again or contact support if the issue persists.")
+		fmt.Fprintf(&b, "\nPlease try again or visit https://docs.basic.tech if the issue persists.")
 		return b.String()
 
 		// return m.errorMessage
