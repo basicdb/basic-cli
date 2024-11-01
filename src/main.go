@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/99designs/keyring"
 	"github.com/charmbracelet/bubbles/spinner"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -35,7 +36,6 @@ var (
 	green  = lipgloss.AdaptiveColor{Light: "#02BA84", Dark: "#02BF87"}
 )
 
-// Update the constants for the directory and file name
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
@@ -119,15 +119,15 @@ func NewStyles(lg *lipgloss.Renderer) *Styles {
 	return &s
 }
 
-type state int
+// type state int
 
-const (
-	statusNormal state = iota
-	stateDone
-)
+// const (
+// 	statusNormal state = iota
+// 	stateDone
+// )
 
 type FormModel struct {
-	state        state
+	// state        state
 	lg           *lipgloss.Renderer
 	styles       *Styles
 	form         *huh.Form
@@ -148,7 +148,6 @@ func NewFormModel() FormModel {
 	m.lg = lipgloss.DefaultRenderer()
 	m.styles = NewStyles(m.lg)
 
-	// Create custom keymap
 	keyMap := huh.NewDefaultKeyMap()
 	keyMap.Quit.SetKeys("esc", "ctrl+c")
 
@@ -192,7 +191,7 @@ func NewFormModel() FormModel {
 }
 
 func (m FormModel) Init() tea.Cmd {
-	// Temporary bugfix to make input field is focused
+	// Temporary bugfix to make input field is focused:
 	m.form.NextField()
 	m.form.PrevField()
 
@@ -259,7 +258,6 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projectID = msg.projectID
 		m.projectCreated = true
 
-		// create config file
 		err := createConfigFile(msg.projectName, msg.projectID, m.configOption)
 		if err != nil {
 			return m, func() tea.Msg {
@@ -475,7 +473,7 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 	return newProjectMsg{projectName: projectName, projectID: projectID}
 }
 
-var loggedInUser string
+// var loggedInUser string
 
 type model struct {
 	choice       string
@@ -502,14 +500,13 @@ var (
 	authDone    chan bool
 )
 
-const (
-	keyringService = "basic-cli-oauth"
-	tokenKey       = "basic-cli-oauth-token"
-)
+// const (
+// 	keyringService = "basic-cli-oauth"
+// 	tokenKey       = "basic-cli-oauth-token"
+// )
 
 func init() {
 	// TODO: add scopes
-	// Initialize OAuth2 config
 	oauthConfig = &oauth2.Config{
 		ClientID:     "9c3f6704-87e7-4af9-8dd0-36dcb9b5c18c",
 		ClientSecret: "YOUR_CLIENT_SECRET",
@@ -520,7 +517,12 @@ func init() {
 			TokenURL: "https://api.basic.tech/auth/token",
 		},
 	}
-	oauthState = "random-state-string" // TODO: generate a random state string
+	randomBytes := make([]byte, 24)
+	if _, err := rand.Read(randomBytes); err != nil {
+		panic(err)
+	}
+
+	oauthState = base64.RawURLEncoding.EncodeToString(randomBytes)
 	authDone = make(chan bool)
 }
 
@@ -660,8 +662,6 @@ type projectFormMsg struct {
 	projectName string
 }
 
-type successMsg string
-
 // ----- VIEW ----------- //
 
 func (m model) View() string {
@@ -755,7 +755,6 @@ func checkLatestRelease() (string, error) {
 		return "", fmt.Errorf("error parsing release info: %w", err)
 	}
 
-	// Strip 'v' prefix if present
 	version := strings.TrimPrefix(release.TagName, "v")
 	return version, nil
 }
@@ -877,9 +876,9 @@ func (m projectTableModel) View() string {
 //   🔗   API METHODS             //
 // ----------------------------- //
 
-type showHelpMsg struct {
-	helpText string
-}
+// type showHelpMsg struct {
+// 	helpText string
+// }
 
 type projectsMsg struct {
 	projects []project
@@ -920,14 +919,12 @@ func getProjectsMsg(token *oauth2.Token) tea.Msg {
 
 func performAccount() tea.Msg {
 	token, err := loadToken()
+
 	if err != nil || token == nil {
 		fmt.Println("Not logged in. Please use the 'login' command to authenticate.")
 		return tea.Quit()
 	}
-	if !token.Valid() {
-		fmt.Println("Your session has expired. Please use the 'login' command to re-authenticate.")
-		return tea.Quit()
-	}
+
 	userInfo(token)
 	return tea.Quit()
 }
@@ -946,7 +943,7 @@ func checkStatus() tea.Msg {
 
 // -----------------------------//
 //   🙅 AUTH METHODS            //
-// -----------------------------//
+// -----------------------------//\
 
 func performLogin() tea.Msg {
 	token, err := loadToken()
@@ -980,7 +977,6 @@ func performLogin() tea.Msg {
 
 func handleCallback(server *http.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Check if the request path is exactly "/callback"
 		if r.URL.Path != "/callback" {
 			http.NotFound(w, r)
 			return
@@ -1004,15 +1000,22 @@ func handleCallback(server *http.Server) http.HandlerFunc {
 			return
 		}
 
-		customToken := &CustomToken{Token: *token}
-		err = saveToken(&customToken.Token)
+		refreshToken, ok := token.Extra("refresh").(string)
+		if !ok {
+			fmt.Printf("Failed to get refresh token: %v\n", err)
+			http.Error(w, "Failed to get refresh token", http.StatusInternalServerError)
+			return
+		}
+		token.RefreshToken = refreshToken
+
+		err = saveToken(token)
 		if err != nil {
 			fmt.Printf("Failed to save token: %v\n", err)
 			http.Error(w, "Failed to save token", http.StatusInternalServerError)
 			return
 		}
 
-		loggedInUser = "Authenticated User" // save user info
+		// loggedInUser = "Authenticated User" // save user info
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
@@ -1038,12 +1041,9 @@ func performLogout() tea.Msg {
 	return tea.Quit()
 }
 
-// create userInfo function
 func userInfo(token *oauth2.Token) {
-	// Create an HTTP client with the OAuth2 token
 	client := oauthConfig.Client(context.Background(), token)
 
-	// Make a request to the userinfo endpoint
 	resp, err := client.Get("https://api.basic.tech/auth/userInfo")
 	if err != nil {
 		fmt.Printf("Error fetching user info: %v\n", err)
@@ -1051,14 +1051,12 @@ func userInfo(token *oauth2.Token) {
 	}
 	defer resp.Body.Close()
 
-	// Read and parse the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("Error reading response body: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Parse the JSON response
 	var userInfo map[string]interface{}
 	err = json.Unmarshal(body, &userInfo)
 	if err != nil {
@@ -1066,7 +1064,6 @@ func userInfo(token *oauth2.Token) {
 		os.Exit(1)
 	}
 
-	// Print user information
 	fmt.Println("Logged in user:", userInfo["email"])
 }
 
@@ -1089,13 +1086,12 @@ func openBrowser(url string) error {
 //   🔑 KEYRING & TOKEN METHODS   //
 // ----------------------------- //
 
-func getKeyring() (keyring.Keyring, error) {
-	return keyring.Open(keyring.Config{
-		ServiceName: keyringService,
-	})
-}
+// func getKeyring() (keyring.Keyring, error) {
+// 	return keyring.Open(keyring.Config{
+// 		ServiceName: keyringService,
+// 	})
+// }
 
-// Add a helper function to get the token file path
 func getTokenFilePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1105,10 +1101,8 @@ func getTokenFilePath() (string, error) {
 	return filepath.Join(basicCliDir, tokenFileName), nil
 }
 
-// Update the saveToken function
 func saveToken(token *oauth2.Token) error {
-	customToken := &CustomToken{Token: *token}
-	tokenJSON, err := json.Marshal(customToken)
+	tokenJSON, err := json.Marshal(token)
 	if err != nil {
 		return err
 	}
@@ -1127,7 +1121,7 @@ func saveToken(token *oauth2.Token) error {
 	return os.WriteFile(tokenFilePath, tokenJSON, 0600)
 }
 
-// Update the loadToken function
+// load token from local basic config file
 func loadToken() (*oauth2.Token, error) {
 	tokenFilePath, err := getTokenFilePath()
 	if err != nil {
@@ -1137,26 +1131,23 @@ func loadToken() (*oauth2.Token, error) {
 	tokenData, err := os.ReadFile(tokenFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // No token file exists
+			return nil, nil
 		}
 		return nil, err
 	}
 
-	var customToken CustomToken
-	err = json.Unmarshal(tokenData, &customToken)
+	var token oauth2.Token
+	err = json.Unmarshal(tokenData, &token)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if the token is expired
-	if customToken.Token.Expiry.Before(time.Now()) {
-		// Token has expired, attempt to refresh
-		newToken, err := refreshToken(&customToken.Token)
+	if token.Expiry.Before(time.Now()) {
+		newToken, err := oauthConfig.Exchange(context.Background(), token.RefreshToken)
 		if err != nil {
 			return nil, fmt.Errorf("token has expired and refresh failed: %v", err)
 		}
 
-		// Save the new token
 		if err := saveToken(newToken); err != nil {
 			return nil, fmt.Errorf("failed to save refreshed token: %v", err)
 		}
@@ -1164,10 +1155,9 @@ func loadToken() (*oauth2.Token, error) {
 		return newToken, nil
 	}
 
-	return &customToken.Token, nil
+	return &token, nil
 }
 
-// Update the deleteToken function
 func deleteToken() error {
 	tokenFilePath, err := getTokenFilePath()
 	if err != nil {
@@ -1181,47 +1171,9 @@ func deleteToken() error {
 	return nil
 }
 
-func refreshToken(token *oauth2.Token) (*oauth2.Token, error) {
-	ctx := context.Background()
-	tokenSource := oauthConfig.TokenSource(ctx, token)
-	newToken, err := tokenSource.Token()
-	if err != nil {
-		return nil, err
-	}
-	return newToken, nil
-}
-
 // ----------------------------- //
 //   🦄 UTIL FUNCTIONS           //
 // ----------------------------- //
-
-// CustomToken extends oauth2.Token with custom JSON unmarshaling
-type CustomToken struct {
-	oauth2.Token
-}
-
-// UnmarshalJSON custom unmarshaling for our token
-func (t *CustomToken) UnmarshalJSON(data []byte) error {
-	var obj map[string]interface{}
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
-	}
-
-	// Check if "refresh" key exists and map it to "refresh_token"
-	if refresh, ok := obj["refresh"].(string); ok {
-		obj["refresh_token"] = refresh
-		delete(obj, "refresh")
-	}
-
-	// Re-marshal the modified object
-	modifiedData, err := json.Marshal(obj)
-	if err != nil {
-		return err
-	}
-
-	// Unmarshal into the embedded oauth2.Token
-	return json.Unmarshal(modifiedData, &t.Token)
-}
 
 func generateSlugFromName(name string) string {
 	slug := strings.ToLower(name)
