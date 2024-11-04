@@ -52,7 +52,28 @@ type Styles struct {
 	Help lipgloss.Style
 }
 
-func createConfigFile(name string, projectID string, option string) error {
+func createConfigFile(name string, projectID string, option string, schema string) error {
+	defaultSchema := fmt.Sprintf(`{
+		project_id: "%s", 
+		version: 0,
+		tables: {	
+			example: {
+				name: 'example',
+				type: 'collection',
+				fields: {
+					value: {
+						type: 'string',
+					},
+				}
+			},
+		}
+	}
+	`, projectID)
+
+	if schema == "" {
+		schema = defaultSchema
+	}
+
 	content := fmt.Sprintf(`
 // Basic Project Configuration
 // see  the docs for more info: https://docs.basic.tech
@@ -61,22 +82,8 @@ export const config = {
   project_id: "%s"
 };
 
-export const schema = { 
-	project_id: "%s", 
-	version: 0,
-	tables: {	
-		example: {
-			name: 'example',
-			type: 'collection',
-			fields: {
-				value: {
-					type: 'string',
-				},
-			}
-		},
-  }
-}
-`, name, projectID, projectID)
+export const schema = %s
+`, name, projectID, schema)
 
 	var filename string
 	if option == "typescript" {
@@ -90,7 +97,7 @@ export const schema = {
 		return fmt.Errorf("failed to create config file: %v", err)
 	}
 
-	fmt.Printf("Created TypeScript config file: %s\n", filename)
+	fmt.Printf("Created config file: %s\n", filename)
 	return nil
 }
 
@@ -137,21 +144,94 @@ type FormModel struct {
 	projectName  string
 	configOption string
 
+	formStage    string
+	createOption string
+
 	projectID      string
 	projectCreated bool
 	fileCreated    bool
+	projects       []project
+}
+
+func min(x, y int) int {
+	if x > y {
+		return y
+	}
+	return x
+}
+
+type formSubmittedMsg struct {
+	name   string
+	option string
+}
+type errorMsg struct {
+	err error
+}
+
+type errorScreenMsg struct {
+	errorMessage string
+}
+
+type formSuccessMsg struct {
+	projectName string
+	projectID   string
 }
 
 func NewFormModel() FormModel {
 	m := FormModel{width: maxWidth}
 	m.screen = "form"
+	m.formStage = "select"
 	m.lg = lipgloss.DefaultRenderer()
 	m.styles = NewStyles(m.lg)
 
 	keyMap := huh.NewDefaultKeyMap()
 	keyMap.Quit.SetKeys("esc", "ctrl+c")
 
+	m.formStage = "select"
+	m.createOption = ""
+
+	token, err := loadToken()
+	if err != nil {
+		fmt.Println("Not logged in. Please login with 'basic login'")
+		return FormModel{}
+	}
+
+	projects, err := getProjects(token)
+	if err != nil {
+		fmt.Println("error getting projects", err)
+		return FormModel{}
+	}
+	m.projects = projects
+	// type projectOption struct {
+	// 	Name string
+	// 	ID   string
+	// }
+	// options := []projectOption{}
+	// for _, project := range projects {
+	// 	options = append(options, projectOption{
+	// 		Name: project.Name,
+	// 		ID:   project.ID,
+	// 	})
+	// }
+
+	options := []huh.Option[string]{}
+	for _, project := range projects {
+		options = append(options, huh.NewOption(project.Name, project.ID))
+	}
+
+	// var selection string
+
 	m.form = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Key("type").
+				Options(
+					huh.NewOption("Create new project", "new"),
+					huh.NewOption("Use existing project", "existing"),
+				).
+				Value(&m.createOption),
+		),
+
 		huh.NewGroup(
 			huh.NewInput().
 				Key("name").
@@ -171,15 +251,39 @@ func NewFormModel() FormModel {
 			huh.NewConfirm().
 				Key("done").
 				Title("All done?").
-				Validate(func(v bool) error {
-					if !v {
-						return fmt.Errorf("oops")
-					}
-					return nil
-				}).
 				Affirmative("Yep!").
 				Negative("Wait, no"),
-		),
+		).WithHideFunc(func() bool {
+			return m.createOption == "existing"
+		}),
+
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Key("id").
+				Title("Select Project").
+				// Options(huh.NewOptions(options...)...).
+				Options(options...).
+				Height(10).
+				Validate(func(v string) error {
+					if v == "" {
+						return fmt.Errorf("project is required")
+					}
+					return nil
+				}),
+
+			huh.NewSelect[string]().
+				Key("option").
+				Title("Generate config file?").
+				Options(huh.NewOptions("typescript", "javascript", "none")...),
+
+			huh.NewConfirm().
+				Key("done").
+				Title("All done?").
+				Affirmative("Yep!").
+				Negative("Wait, no"),
+		).WithHideFunc(func() bool {
+			return m.createOption == "new"
+		}),
 	).
 		WithWidth(45).
 		WithShowHelp(false).
@@ -198,42 +302,6 @@ func (m FormModel) Init() tea.Cmd {
 	return nil
 }
 
-func min(x, y int) int {
-	if x > y {
-		return y
-	}
-	return x
-}
-
-type formSubmittedMsg struct {
-	name   string
-	option string
-}
-
-func (m FormModel) handleFormSubmit() tea.Cmd {
-	return func() tea.Msg {
-		name := m.form.GetString("name")
-		option := m.form.GetString("option")
-		return formSubmittedMsg{
-			name:   name,
-			option: option,
-		}
-	}
-}
-
-type errorMsg struct {
-	err error
-}
-
-type errorScreenMsg struct {
-	errorMessage string
-}
-
-type formSuccessMsg struct {
-	projectName string
-	projectID   string
-}
-
 func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -246,19 +314,44 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case formSubmittedMsg:
 		m.projectName = msg.name
 		m.configOption = msg.option
-		return m, func() tea.Msg {
-			return createNewProjectMsg(msg.name, generateSlugFromName(msg.name))
+
+		if m.formStage == "new" {
+			return m, func() tea.Msg {
+				return createNewProjectMsg(msg.name, generateSlugFromName(msg.name))
+			}
+		} else if m.formStage == "existing" {
+			return m, func() tea.Msg {
+
+				return newProjectMsg{
+					projectName: m.projectName,
+					projectID:   m.projectID,
+				}
+			}
 		}
+
 	case newProjectMsg:
 		if msg.err != nil {
 			return m, func() tea.Msg {
 				return errorMsg{err: msg.err}
 			}
 		}
-		m.projectID = msg.projectID
 		m.projectCreated = true
+		m.projectID = msg.projectID
 
-		err := createConfigFile(msg.projectName, msg.projectID, m.configOption)
+		schema := ""
+		if m.formStage == "existing" {
+			gotSchema, err := getProjectSchema(msg.projectID)
+			if err != nil {
+				return m, func() tea.Msg {
+					return errorMsg{err: err}
+				}
+			}
+
+			schema = gotSchema
+
+		}
+
+		err := createConfigFile(msg.projectName, msg.projectID, m.configOption, schema)
 		if err != nil {
 			return m, func() tea.Msg {
 				return errorMsg{err: err}
@@ -286,6 +379,28 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	if m.form.GetString("type") == "new" {
+		m.formStage = "new"
+	} else {
+		m.formStage = "existing"
+	}
+
+	if m.form.GetString("id") != "" {
+		m.projectID = m.form.GetString("id")
+		m.projectName = func() string {
+			for _, p := range m.projects {
+				if p.ID == m.projectID {
+					return p.Name
+				}
+			}
+			return ""
+		}()
+	}
+
+	if m.form.GetString("name") != "" {
+		m.projectName = m.form.GetString("name")
+	}
+
 	var cmds []tea.Cmd
 
 	// Process the form
@@ -296,8 +411,15 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.form.State == huh.StateCompleted {
+
 		m.screen = "loading"
-		cmds = append(cmds, m.handleFormSubmit())
+		cmds = append(cmds, func() tea.Msg {
+			option := m.form.GetString("option")
+			return formSubmittedMsg{
+				name:   m.projectName,
+				option: option,
+			}
+		})
 	}
 
 	return m, tea.Batch(cmds...)
@@ -345,6 +467,16 @@ func (m FormModel) View() string {
 		if m.form.GetString("name") != "" {
 			projectName = "Name: " + m.form.GetString("name")
 		}
+		if m.form.GetString("id") != "" {
+			projectName = func() string {
+				for _, p := range m.projects {
+					if p.ID == m.form.GetString("id") {
+						return "Name: " + p.Name
+					}
+				}
+				return ""
+			}()
+		}
 
 		// Form (left side)
 		v := strings.TrimSuffix(m.form.View(), "\n\n")
@@ -359,6 +491,10 @@ func (m FormModel) View() string {
 				buildInfo = fmt.Sprintf("%s\n\nslug: %s", projectName, generateSlugFromName(m.form.GetString("name")))
 			}
 
+			if m.form.GetString("id") != "" {
+				buildInfo = fmt.Sprintf("%s\n\nID: %s", projectName, m.form.GetString("id"))
+			}
+
 			const statusWidth = 28
 			statusMarginLeft := m.width - statusWidth - lipgloss.Width(form) - s.Status.GetMarginRight()
 			status = s.Status.
@@ -369,8 +505,23 @@ func (m FormModel) View() string {
 					buildInfo)
 		}
 
+		stage := m.form.GetString("type")
+		var headerText string
+		switch stage {
+		case "new":
+			headerText = "New Basic Project"
+		case "existing":
+			headerText = "Setup Existing Project"
+		default:
+			headerText = "What would you like to do?"
+		}
+
+		if stage == "" {
+			status = ""
+		}
+
 		errors := m.form.Errors()
-		header := m.appBoundaryView("New Basic Project")
+		header := m.appBoundaryView(headerText)
 		if len(errors) > 0 {
 			header = m.appErrorBoundaryView(m.errorView())
 		}
@@ -557,8 +708,8 @@ func (m model) Init() tea.Cmd {
 }
 
 const (
-	offlineMessage   = "You are offline. Please check your internet connection."
-	loggedOutMessage = "You are not logged in. Please login with 'basic login'"
+	offlineMessage   = "you are offline. please check your internet connection."
+	loggedOutMessage = "you are not logged in. please login with 'basic login'"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -937,6 +1088,60 @@ type project struct {
 	Website string
 }
 
+func getProjectSchema(projectID string) (string, error) {
+	resp, err := http.Get("https://api.basic.tech/project/" + projectID + "/schema")
+	if err != nil {
+		return "", fmt.Errorf("error fetching project schema: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response struct {
+		Data struct {
+			Schema map[string]interface{} `json:"schema"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return "", fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	prettyJSON, err := json.MarshalIndent(response.Data.Schema, "\t", "\t")
+	if err != nil {
+		return "", fmt.Errorf("error formatting schema JSON: %v", err)
+	}
+
+	if string(prettyJSON) == "null" {
+		return "", nil
+	}
+
+	return string(prettyJSON), nil
+}
+
+func getProjects(token *oauth2.Token) ([]project, error) {
+	client := oauthConfig.Client(context.Background(), token)
+	resp, err := client.Get("https://api.basic.tech/account/projects")
+	if err != nil {
+		return nil, fmt.Errorf("error fetching projects: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var response struct {
+		Data []project `json:"data"`
+	}
+
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	return response.Data, nil
+}
+
 func getProjectsMsg(token *oauth2.Token) tea.Msg {
 	client := oauthConfig.Client(context.Background(), token)
 	resp, err := client.Get("https://api.basic.tech/account/projects")
@@ -964,7 +1169,7 @@ func getProjectsMsg(token *oauth2.Token) tea.Msg {
 
 func performAccount() tea.Msg {
 	token, err := loadToken()
-
+	// fmt.Println("token", token, "err", err)
 	if err != nil || token == nil {
 		fmt.Println("Not logged in. Please use the 'login' command to authenticate.")
 		return tea.Quit()
@@ -1143,7 +1348,7 @@ func getTokenFilePath() (string, error) {
 		return "", err
 	}
 	basicCliDir := filepath.Join(homeDir, basicCliDirName)
-	return filepath.Join(basicCliDir, tokenFileName), nil
+	return filepath.Join(basicCliDir, tokenFileName), err
 }
 
 func saveToken(token *oauth2.Token) error {
@@ -1170,6 +1375,7 @@ func saveToken(token *oauth2.Token) error {
 func loadToken() (*oauth2.Token, error) {
 	tokenFilePath, err := getTokenFilePath()
 	if err != nil {
+		fmt.Println("error getting token file path", err)
 		return nil, err
 	}
 
@@ -1434,3 +1640,78 @@ func getHtmlPage() string {
 		
 	`
 }
+
+// Add these new types and functions
+type InitSelectionModel struct {
+	form *huh.Form
+}
+
+func NewInitSelectionModel() InitSelectionModel {
+	m := InitSelectionModel{}
+
+	m.form = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("What would you like to do?").
+				Options(
+					huh.NewOption("Create New Project", "new"),
+					huh.NewOption("Select Existing Project", "existing"),
+				).
+				Value(&selectedOption),
+		),
+	).
+		WithWidth(50).
+		WithShowHelp(false)
+
+	m.form.Init()
+	return m
+}
+
+func (m InitSelectionModel) Init() tea.Cmd {
+
+	m.form.NextField()
+	m.form.PrevField()
+
+	return nil
+}
+
+func (m InitSelectionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch msg.String() {
+		case "ctrl+c", "esc":
+			return m, tea.Quit
+		case "enter":
+			if m.form.State == huh.StateCompleted {
+				switch selectedOption {
+				case "new":
+					// return NewFormModel(), nil
+					return NewFormModel(), func() tea.Msg {
+						return projectFormMsg{projectName: "test"}
+					}
+				case "existing":
+					// This will be implemented later to show project selection
+					return m, func() tea.Msg {
+						return errorScreenMsg{errorMessage: "Project selection coming soon!"}
+					}
+				}
+			}
+		}
+	}
+
+	form, cmd := m.form.Update(msg)
+	if f, ok := form.(*huh.Form); ok {
+		m.form = f
+	}
+	return m, cmd
+}
+
+func (m InitSelectionModel) View() string {
+	return "\n" + m.form.View() + "\n\n" +
+		lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Render("↑/↓ to select • enter to confirm • esc to quit")
+}
+
+// Add this variable at the package level
+var selectedOption string
