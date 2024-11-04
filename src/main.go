@@ -772,8 +772,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, func() tea.Msg {
 				token, err := loadToken()
-				if err != nil {
-					return projectsMsg{err: fmt.Errorf(loggedOutMessage)}
+				if err != nil || token == nil {
+					return errorScreenMsg{errorMessage: offlineMessage}
 				}
 				return getProjectsMsg(token)
 			}
@@ -783,9 +783,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return errorScreenMsg{errorMessage: offlineMessage}
 				}
 			}
-			// Check if config file already exists
-			_, err := loadToken()
-			if err != nil {
+
+			token, err := loadToken()
+			if err != nil || token == nil {
 				return m, func() tea.Msg {
 					return errorScreenMsg{errorMessage: loggedOutMessage}
 				}
