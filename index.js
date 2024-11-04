@@ -32,7 +32,8 @@ if (!fs.existsSync(binary)) {
 
 
 const sourcePath = binary
-const destPath = path.join(__dirname, 'bin', 'basic-cli');
+const fileName = platform == 'windows' ? 'basic-cli.exe' : 'basic-cli'
+const destPath = path.join(__dirname, 'bin', fileName);
 
 try {
   // Ensure the bin directory exists
