@@ -28,6 +28,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+//TODO:
+// - in main model, make messages array standard
+// - combine func for checking online, connected, and logged in
+//
+// - add interactive y/n to pull
+
 const maxWidth = 80
 
 var (
@@ -70,7 +76,7 @@ func createConfigFile(name string, projectID string, option string, schema strin
 	}
 	`, projectID)
 
-	fmt.Println("schema", schema)
+	// fmt.Println("schema", schema)
 	if schema == "" {
 		schema = defaultSchema
 	}
@@ -796,15 +802,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "logout":
 			return m, performLogout
 		case "status":
-			// m.loading = true
+			token, err := loadToken()
+			if err != nil || token == nil {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: loggedOutMessage}
+				}
+			}
+
 			m.state = stateStatus
 			fmt.Println("Checking status...")
 			return m, checkStatusCmd
 		case "push":
+			token, err := loadToken()
+			if err != nil || token == nil {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: loggedOutMessage}
+				}
+			}
+
 			m.showMessages = true
 			m.messages = append(m.messages, "Pushing schema...")
 			return m, pushSchemaCmd
 		case "pull":
+			token, err := loadToken()
+			if err != nil || token == nil {
+				return m, func() tea.Msg {
+					return errorScreenMsg{errorMessage: loggedOutMessage}
+				}
+			}
+
 			m.showMessages = true
 			return m, pullSchemaCmd
 		case "projects":
@@ -817,7 +843,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				token, err := loadToken()
 				if err != nil || token == nil {
-					return errorScreenMsg{errorMessage: offlineMessage}
+					return errorScreenMsg{errorMessage: loggedOutMessage}
 				}
 				return getProjectsMsg(token)
 			}
@@ -1019,13 +1045,16 @@ func (m model) View() string {
 		b += "  account - Show account information\n"
 		b += "  login - login with your basic account\n"
 		b += "  logout - logout from your basic account\n"
-		b += "  status - Show login status\n"
+		b += "  status - Show schema status in current project\n"
+		b += "  push - Push schema to remote\n"
+		b += "  pull - Pull schema from remote\n"
 		b += "  projects - list your projects\n"
-		b += "  init - Create a new project\n"
+		b += "  init - Create a new project or import an existing project\n"
 		b += "  version - Show CLI version\n"
 		b += "  update - Update CLI to the latest version\n"
 		b += "  debug - Show Basic config directory location\n"
 
+		b += "\nIf you are having trouble, please visit https://docs.basic.tech\n"
 		return b
 	}
 
@@ -1070,7 +1099,7 @@ func pullSchemaCmd() tea.Msg {
 		}
 	}
 
-	return pullSchemaMsg{success: false, message: "Error checking schema status"}
+	return pullSchemaMsg{success: false, message: m.(statusMsg).text}
 }
 
 type pushSchemaMsg struct {
@@ -1116,6 +1145,9 @@ func checkStatusCmd() tea.Msg {
 	schema, err := readSchemaFromConfig()
 	if err != nil {
 		messages = append(messages, fmt.Sprintf("Error reading schema: %v", err))
+		messages = append(messages, "Please make sure a basic config file exists and is valid")
+		messages = append(messages, "you can also run 'basic init' to create a new project or import an existing project")
+
 	} else if schema == "" {
 		messages = append(messages, "No schema found in config files")
 	} else {
@@ -1975,6 +2007,8 @@ var commands = []string{
 	"version",
 	"config",
 	"help",
+	"push",
+	"pull",
 }
 
 // Calculate similarity between two strings using Levenshtein distance
