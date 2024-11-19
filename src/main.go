@@ -769,6 +769,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = append(m.messages, msg.message)
 			}
 			return m, tea.Quit
+		// case pullSchemaConfirmMsg:
 		case pullSchemaMsg:
 			m.showMessages = true
 			if msg.success {
@@ -1070,12 +1071,19 @@ type pullSchemaMsg struct {
 	message string
 }
 
+type pullSchemaConfirmMsg struct {
+	success bool
+	message string
+}
+
 func pullSchemaCmd() tea.Msg {
 
 	m := checkStatusCmd()
 	if m, ok := m.(statusMsg); ok {
 		if m.status == "current" {
 			return pullSchemaMsg{success: true, message: "Schema is up to date!"}
+		} else if m.status == "conflict" {
+			return pullSchemaMsg{success: false, message: "conflict found. are you sure you want to override."}
 		} else if m.status == "behind" {
 
 			schema, err := getProjectSchema(m.projectID)
@@ -1129,105 +1137,185 @@ func pushSchemaCmd() tea.Msg {
 }
 
 func checkStatusCmd() tea.Msg {
+	// Check authentication
 	token, err := loadToken()
 	if err != nil {
 		return statusErrorMsg{err: fmt.Errorf("not logged in")}
 	}
-
 	if !token.Valid() {
 		return statusErrorMsg{err: fmt.Errorf("token has expired")}
 	}
 
-	messages := []string{""}
-	status := ""
-	projectID := ""
-
+	// Read and validate schema
 	schema, err := readSchemaFromConfig()
 	if err != nil {
-		messages = append(messages, fmt.Sprintf("Error reading schema: %v", err))
-		messages = append(messages, "Please make sure a basic config file exists and is valid")
-		messages = append(messages, "you can also run 'basic init' to create a new project or import an existing project")
+		return statusMsg{text: strings.Join([]string{
+			fmt.Sprintf("Error reading schema: %v", err),
+			"Please make sure a basic config file exists and is valid",
+			"you can also run 'basic init' to create a new project or import an existing project",
+		}, "\n")}
+	}
+	if schema == "" {
+		return statusMsg{text: "No schema found in config files"}
+	}
 
-	} else if schema == "" {
-		messages = append(messages, "No schema found in config files")
-	} else {
-		var schemaData map[string]interface{}
-		if err := json.Unmarshal([]byte(schema), &schemaData); err != nil {
-			messages = append(messages, fmt.Sprintf("Error parsing schema: %v", err))
-		} else {
+	// Parse schema JSON
+	var schemaData map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaData); err != nil {
+		return statusMsg{text: fmt.Sprintf("Error parsing schema: %v", err)}
+	}
 
-			if pid, ok := schemaData["project_id"].(string); ok {
-				messages = append(messages, fmt.Sprintf("Project ID: %s", pid))
-				projectID = pid
-				latestSchema, err := getProjectSchema(pid)
-				if err != nil && latestSchema == "" {
-					messages = append(messages, fmt.Sprintf("Error fetching latest schema: %v", err))
-				}
+	// Get project ID
+	projectID, ok := schemaData["project_id"].(string)
+	if !ok {
+		return statusMsg{text: "No project ID found in schema"}
+	}
 
-				if latestSchema == "" {
-					// messages = append(messages, "Remote schema is em")
+	messages := []string{fmt.Sprintf("Project ID: %s", projectID)}
 
-					latestSchema = fmt.Sprintf(`{
-						"project_id": "%s",
-						"version": 0,
-						"tables": {}
-					}`, pid)
-				}
+	// Get and validate latest schema
+	latestSchema, err := getProjectSchema(projectID)
+	if err != nil && latestSchema == "" {
+		messages = append(messages, fmt.Sprintf("Error fetching latest schema: %v", err))
+		return statusMsg{text: strings.Join(messages, "\n"), schema: schema, projectID: projectID}
+	}
 
-				var latestSchemaData map[string]interface{}
-				if err := json.Unmarshal([]byte(latestSchema), &latestSchemaData); err != nil {
-					messages = append(messages, fmt.Sprintf("Error parsing latest schema: %v", err))
-				} else if version, ok := latestSchemaData["version"].(float64); ok {
-					messages = append(messages, fmt.Sprintf("Remote schema version: %.0f", version))
-				} else {
-					messages = append(messages, "No version found in latest schema")
-				}
+	// Create empty schema if none exists
+	if latestSchema == "" {
+		latestSchema = fmt.Sprintf(`{
+			"project_id": "%s",
+			"version": 0,
+			"tables": {}
+		}`, projectID)
+	}
 
-				if currentVersion, ok := schemaData["version"].(float64); ok {
-					if latestSchema != "" {
-						if latestVersion, ok := latestSchemaData["version"].(float64); ok {
-							if currentVersion < latestVersion {
-								messages = append(messages, fmt.Sprintf("Schema is out of date! Current: %.0f, Latest: %.0f", currentVersion, latestVersion))
+	// Parse latest schema
+	var latestSchemaData map[string]interface{}
+	if err := json.Unmarshal([]byte(latestSchema), &latestSchemaData); err != nil {
+		messages = append(messages, fmt.Sprintf("Error parsing latest schema: %v", err))
+		return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+	}
 
-								messages = append(messages, "Please run 'basic pull' to update your local schema.")
-								status = "behind"
-							} else if currentVersion > latestVersion {
-								messages = append(messages, fmt.Sprintf("Changes found: Local schema version %.0f is ahead of remote version %.0f", currentVersion, latestVersion))
+	// Get and compare versions
+	currentVersion, ok := schemaData["version"].(float64)
+	if !ok {
+		messages = append(messages, "No version found in current schema")
+		return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+	}
 
-								valid, err := validateSchema(schema)
-								if err != nil {
-									messages = append(messages, fmt.Sprintf("Error validating schema: %v", err))
-								} else if valid.Valid != nil && !*valid.Valid {
-									status = "invalid"
-									messages = append(messages, "Errors found in schema! Please fix:")
+	latestVersion, ok := latestSchemaData["version"].(float64)
+	if !ok {
+		messages = append(messages, "No version found in latest schema")
+		return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+	}
 
-									for _, err := range valid.Errors {
-										messages = append(messages, fmt.Sprintf(" - %s", err.Message))
-									}
-								} else {
-									messages = append(messages, "Schema changes are valid!")
+	messages = append(messages, fmt.Sprintf("Remote schema version: %.0f", latestVersion))
 
-									messages = append(messages, "Please run 'basic push' if you are ready to publish your changes.")
-									status = "valid"
-								}
-							} else {
-								// TODO: confirm local schema is same as remote - compare hash
-								messages = append(messages, "Schema is up to date!")
-								status = "current"
-							}
-						}
-					}
-				} else {
-					messages = append(messages, "No version found in current schema")
-				}
+	// Handle version differences
+	if currentVersion < latestVersion {
+		messages = append(messages,
+			fmt.Sprintf("Schema is out of date! Current: %.0f, Latest: %.0f", currentVersion, latestVersion),
+			"Please run 'basic pull' to update your local schema.")
+		return statusMsg{text: strings.Join(messages, "\n"), status: "behind", projectID: projectID}
+	}
 
-			} else {
-				messages = append(messages, "No project ID found in schema")
+	if currentVersion > latestVersion {
+		messages = append(messages,
+			fmt.Sprintf("Changes found: Local schema version %.0f is ahead of remote version %.0f", currentVersion, latestVersion))
+
+		valid, err := validateSchema(schema)
+		if err != nil {
+			messages = append(messages, fmt.Sprintf("Error validating schema: %v", err))
+			return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+		}
+
+		if valid.Valid != nil && !*valid.Valid {
+			messages = append(messages, "Errors found in schema! Please fix:")
+			for _, err := range valid.Errors {
+				messages = append(messages, fmt.Sprintf(" - %s", err.Message))
 			}
+			return statusMsg{text: strings.Join(messages, "\n"), status: "invalid", schema: schema, projectID: projectID}
+		}
+
+		messages = append(messages,
+			"Schema changes are valid!",
+			"Please run 'basic push' if you are ready to publish your changes.")
+		return statusMsg{text: strings.Join(messages, "\n"), status: "valid", schema: schema, projectID: projectID}
+	}
+
+	if currentVersion == latestVersion {
+
+		valid, err := checkSchemaConflict(schema)
+		if err != nil {
+			messages = append(messages, fmt.Sprintf("Error checking schema conflict: %v", err))
+			return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+		}
+
+		if valid {
+			messages = append(messages, "Schema is up to date!")
+			return statusMsg{text: strings.Join(messages, "\n"), status: "current", schema: schema, projectID: projectID}
+		} else {
+			messages = append(messages, "")
+			messages = append(messages, "Schema conflicts found! Your local schema is different from the remote schema.")
+			messages = append(messages, "- Please run 'basic pull' to override local changes with remote schema.")
+			messages = append(messages, "- or increment the version number in your local schema.")
+			return statusMsg{text: strings.Join(messages, "\n"), status: "conflict", schema: schema, projectID: projectID}
 		}
 	}
 
-	return statusMsg{text: strings.Join(messages, "\n"), status: status, schema: schema, projectID: projectID}
+	return statusErrorMsg{err: fmt.Errorf("unknown schema status")}
+}
+
+func checkSchemaConflict(schema string) (bool, error) {
+	var schemaObj map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaObj); err != nil {
+		return false, fmt.Errorf("error parsing schema JSON: %v", err)
+	}
+
+	reqBody := struct {
+		Schema map[string]interface{} `json:"schema"`
+	}{
+		Schema: schemaObj,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return false, fmt.Errorf("error marshaling request body: %v", err)
+	}
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "https://api.basic.tech/schema/compareSchema", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return false, fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("error checking schema conflict: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return false, fmt.Errorf("error decoding error response: %v", err)
+		}
+		return false, fmt.Errorf("API error: %s", errResp.Error)
+	}
+
+	var response struct {
+		Valid bool `json:"valid"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return false, fmt.Errorf("error parsing response: %v", err)
+	}
+
+	return response.Valid, nil
 }
 
 func checkLatestRelease() (string, error) {
