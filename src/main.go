@@ -43,7 +43,7 @@ var (
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
-	version         = "0.0.11"
+	version         = "0.0.12"
 )
 
 type Styles struct {
