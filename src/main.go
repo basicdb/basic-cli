@@ -642,6 +642,8 @@ type model struct {
 	errorMessage string
 	suggestions  []string
 
+	currentProjectID string
+
 	messages     []string
 	showMessages bool
 
@@ -739,6 +741,35 @@ const (
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
+	if m.form != nil {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "ctrl+c", "esc":
+				return m, tea.Quit
+			}
+		}
+		form, cmd := m.form.Update(msg)
+		if f, ok := form.(*huh.Form); ok {
+			m.form = f
+			if m.form.State == huh.StateCompleted {
+				confirmed := m.form.GetBool("confirm")
+				m.form = nil
+				if confirmed {
+					m.messages = append(m.messages, "Pulling schema...")
+					return m, func() tea.Msg {
+						return pullSchemaConfirmCmd(m.currentProjectID)
+					}
+				} else {
+					m.messages = append(m.messages, "Pull schema cancelled")
+					return m, tea.Quit
+				}
+			}
+
+			return m, cmd
+		}
+	}
+
 	switch m.state {
 	case stateChoosing:
 		switch msg := msg.(type) {
@@ -769,7 +800,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = append(m.messages, msg.message)
 			}
 			return m, tea.Quit
-		// case pullSchemaConfirmMsg:
+		case pullSchemaConfirmMsg:
+			m.currentProjectID = msg.projectID
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Key("confirm").
+						Title(msg.message).
+						Description("This will override your local schema file.").
+						Affirmative("Yes, pull schema").
+						Negative("No, cancel"),
+				),
+			).WithShowHelp(false)
+
+			m.form = form
+			m.form.Init()
+			return m, nil
 		case pullSchemaMsg:
 			m.showMessages = true
 			if msg.success {
@@ -984,6 +1030,13 @@ func (m model) View() string {
 		return s.String()
 	}
 
+	if m.form != nil {
+		return "\n" + m.form.View() + "\n\n" +
+			lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				Render("↑/↓ to select • enter to confirm • esc to quit")
+	}
+
 	switch m.state {
 	case stateChoosing:
 		if m.loading {
@@ -1072,8 +1125,30 @@ type pullSchemaMsg struct {
 }
 
 type pullSchemaConfirmMsg struct {
-	success bool
-	message string
+	success   bool
+	message   string
+	projectID string
+}
+
+func pullSchemaConfirmCmd(projectID string) tea.Msg {
+
+	schema, err := getProjectSchema(projectID)
+	if err != nil {
+		fmt.Println("Error pulling schema:", err)
+		return pullSchemaMsg{success: false, message: "Error pulling schema"}
+	}
+	if schema == "" {
+		return pullSchemaMsg{success: false, message: "No schema found for project"}
+	}
+
+	err = saveSchemaToConfig(schema)
+	if err != nil {
+		fmt.Println("Error saving schema to config:", err)
+		return pullSchemaMsg{success: false, message: "Error saving schema to config"}
+	}
+
+	return pullSchemaMsg{success: true, message: "Schema pulled successfully!"}
+
 }
 
 func pullSchemaCmd() tea.Msg {
@@ -1083,25 +1158,9 @@ func pullSchemaCmd() tea.Msg {
 		if m.status == "current" {
 			return pullSchemaMsg{success: true, message: "Schema is up to date!"}
 		} else if m.status == "conflict" {
-			return pullSchemaMsg{success: false, message: "conflict found. are you sure you want to override."}
+			return pullSchemaConfirmMsg{success: false, message: "Conflicts found - your local schema is different from remote schema.", projectID: m.projectID}
 		} else if m.status == "behind" {
-
-			schema, err := getProjectSchema(m.projectID)
-			if err != nil {
-				fmt.Println("Error pulling schema:", err)
-				return pullSchemaMsg{success: false, message: "Error pulling schema"}
-			}
-			if schema == "" {
-				return pullSchemaMsg{success: false, message: "No schema found for project"}
-			}
-
-			err = saveSchemaToConfig(schema)
-			if err != nil {
-				fmt.Println("Error saving schema to config:", err)
-				return pullSchemaMsg{success: false, message: "Error saving schema to config"}
-			}
-
-			return pullSchemaMsg{success: true, message: "Schema pulled successfully!"}
+			return pullSchemaConfirmMsg{success: false, message: "Your schema is out of date. Do you want to pull the latest version?", projectID: m.projectID}
 		} else if m.status == "valid" {
 			return pullSchemaMsg{success: false, message: "Schema is ahead of remote version - did you mean to push?"}
 		}
