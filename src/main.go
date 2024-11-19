@@ -54,22 +54,23 @@ type Styles struct {
 
 func createConfigFile(name string, projectID string, option string, schema string) error {
 	defaultSchema := fmt.Sprintf(`{
-		project_id: "%s", 
-		version: 0,
-		tables: {	
-			example: {
-				name: 'example',
-				type: 'collection',
-				fields: {
-					value: {
-						type: 'string',
-					},
+		"project_id": "%s",
+		"version": 1,
+		"tables": {
+			"example": {
+				"name": "example",
+				"type": "collection",
+				"fields": {
+					"value": {
+						"type": "string"
+					}
 				}
-			},
+			}
 		}
 	}
 	`, projectID)
 
+	fmt.Println("schema", schema)
 	if schema == "" {
 		schema = defaultSchema
 	}
@@ -82,7 +83,7 @@ export const config = {
   project_id: "%s"
 };
 
-export const schema = %s
+export const schema = %s;
 `, name, projectID, schema)
 
 	var filename string
@@ -634,6 +635,14 @@ type model struct {
 	spinner      spinner.Model
 	errorMessage string
 	suggestions  []string
+
+	messages     []string
+	showMessages bool
+
+	// Add new status-related fields
+	statusMessages []string
+	statusLoading  bool
+	statusError    error
 }
 
 type programState int
@@ -643,6 +652,7 @@ const (
 	stateSuccess
 	stateError
 	stateUnknown
+	stateStatus // Add this new state
 )
 
 var (
@@ -696,14 +706,23 @@ func initialModel(command string) model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return model{
+
+	m := model{
 		choice:  command,
 		loading: false,
 		spinner: s,
 	}
+
+	return m
 }
 
 func (m model) Init() tea.Cmd {
+	if m.state == stateStatus {
+		return tea.Batch(
+			m.spinner.Tick,
+			checkStatusCmd,
+		)
+	}
 	return nil
 }
 
@@ -736,6 +755,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateError
 			m.errorMessage = msg.errorMessage
 			return m, tea.Quit
+		case pushSchemaMsg:
+			m.showMessages = true
+			if msg.success {
+				m.messages = append(m.messages, msg.message)
+			} else {
+				m.messages = append(m.messages, msg.message)
+			}
+			return m, tea.Quit
+		case pullSchemaMsg:
+			m.showMessages = true
+			if msg.success {
+				m.messages = append(m.messages, msg.message)
+			} else {
+				m.messages = append(m.messages, msg.message)
+			}
+			return m, tea.Quit
 		}
 
 		switch m.choice {
@@ -761,8 +796,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "logout":
 			return m, performLogout
 		case "status":
-			m.loading = true
-			return m, checkStatus
+			// m.loading = true
+			m.state = stateStatus
+			fmt.Println("Checking status...")
+			return m, checkStatusCmd
+		case "push":
+			m.showMessages = true
+			m.messages = append(m.messages, "Pushing schema...")
+			return m, pushSchemaCmd
+		case "pull":
+			m.showMessages = true
+			return m, pullSchemaCmd
 		case "projects":
 			if !isOnline() {
 				return m, func() tea.Msg {
@@ -828,7 +872,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := exec.Command("npm", "update", "-g", "@basictech/cli")
 			_, err := cmd.CombinedOutput()
 			if err != nil {
-				fmt.Printf("Error updating CLI: %v\n", err)
+				fmt.Printf("Error updating CLI: %v\n try running 'npm update -g @basictech/cli' or visit https://docs.basic.tech/", err)
 			} else {
 				fmt.Println("Update successful!")
 			}
@@ -841,16 +885,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.suggestions = suggestions
 			return m, tea.Quit
 		}
+	case stateStatus:
+		if msg, ok := msg.(tea.KeyMsg); ok && msg.Type == tea.KeyEnter {
+			return m, tea.Quit
+		}
+		switch msg := msg.(type) {
+		case statusMsg:
+			m.statusMessages = append(m.statusMessages, msg.text)
+			return m, tea.Quit
+		case statusErrorMsg:
+			m.statusError = msg.err
+			m.statusLoading = false
+			return m, tea.Quit
+		}
+
 	case stateSuccess:
 		if msg, ok := msg.(tea.KeyMsg); ok && msg.Type == tea.KeyEnter {
 			return m, tea.Quit
 		}
+
 	}
 	return m, nil
 }
 
 type projectFormMsg struct {
 	projectName string
+}
+type statusErrorMsg struct {
+	err error
+}
+
+type statusMsg struct {
+	text      string
+	status    string
+	schema    string
+	projectID string
 }
 
 func isOnline() bool {
@@ -861,6 +930,33 @@ func isOnline() bool {
 // ----- VIEW ----------- //
 
 func (m model) View() string {
+	if m.state == stateStatus {
+		var s strings.Builder
+
+		if m.statusLoading {
+			s.WriteString(fmt.Sprintf("%s Checking status...\n", m.spinner.View()))
+			return s.String()
+		}
+
+		if m.statusError != nil {
+			return lipgloss.NewStyle().
+				Foreground(lipgloss.Color("9")).
+				Render(fmt.Sprintf("Error: %v", m.statusError))
+		}
+
+		for _, msg := range m.statusMessages {
+			if strings.HasPrefix(msg, " -") {
+				s.WriteString(lipgloss.NewStyle().
+					Foreground(lipgloss.Color("9")).
+					Render(msg + "\n"))
+			} else {
+				s.WriteString(msg + "\n")
+			}
+		}
+
+		return s.String()
+	}
+
 	switch m.state {
 	case stateChoosing:
 		if m.loading {
@@ -890,6 +986,14 @@ func (m model) View() string {
 
 	}
 
+	if m.showMessages {
+		var b strings.Builder
+		for _, message := range m.messages {
+			b.WriteString(message + "\n")
+		}
+		return b.String()
+	}
+
 	if m.form != nil {
 		return m.form.View()
 	}
@@ -901,7 +1005,7 @@ func (m model) View() string {
 		if err != nil {
 			b.WriteString("\nOopsy - could not check if new version is available.\n")
 		} else if latestVersion != version {
-			b.WriteString(fmt.Sprintf("New version available: %s\n \nPlease update with 'npm update -g @basictech/cli'\n", latestVersion))
+			b.WriteString(fmt.Sprintf("New version available: %s\n \nPlease update with 'basic update'\n", latestVersion))
 		} else {
 			b.WriteString("You are running the latest version!\n")
 		}
@@ -930,6 +1034,168 @@ func (m model) View() string {
 	}
 
 	return ""
+}
+
+type pullSchemaMsg struct {
+	success bool
+	message string
+}
+
+func pullSchemaCmd() tea.Msg {
+
+	m := checkStatusCmd()
+	if m, ok := m.(statusMsg); ok {
+		if m.status == "current" {
+			return pullSchemaMsg{success: true, message: "Schema is up to date!"}
+		} else if m.status == "behind" {
+
+			schema, err := getProjectSchema(m.projectID)
+			if err != nil {
+				fmt.Println("Error pulling schema:", err)
+				return pullSchemaMsg{success: false, message: "Error pulling schema"}
+			}
+			if schema == "" {
+				return pullSchemaMsg{success: false, message: "No schema found for project"}
+			}
+
+			err = saveSchemaToConfig(schema)
+			if err != nil {
+				fmt.Println("Error saving schema to config:", err)
+				return pullSchemaMsg{success: false, message: "Error saving schema to config"}
+			}
+
+			return pullSchemaMsg{success: true, message: "Schema pulled successfully!"}
+		} else if m.status == "valid" {
+			return pullSchemaMsg{success: false, message: "Schema is ahead of remote version - did you mean to push?"}
+		}
+	}
+
+	return pullSchemaMsg{success: false, message: "Error checking schema status"}
+}
+
+type pushSchemaMsg struct {
+	success bool
+	message string
+}
+
+func pushSchemaCmd() tea.Msg {
+
+	m := checkStatusCmd()
+
+	if m, ok := m.(statusMsg); ok {
+		if m.status == "valid" {
+			success, err := pushProjectSchema(m.schema)
+			if err != nil {
+				fmt.Println("Error pushing schema:", err)
+				return pushSchemaMsg{success: false, message: "Error pushing schema"}
+			}
+
+			return pushSchemaMsg{success: success, message: "Schema pushed successfully!"}
+		} else {
+			return pushSchemaMsg{success: false, message: m.text}
+		}
+	}
+
+	return pushSchemaMsg{success: false, message: "Error checking schema status"}
+}
+
+func checkStatusCmd() tea.Msg {
+	token, err := loadToken()
+	if err != nil {
+		return statusErrorMsg{err: fmt.Errorf("not logged in")}
+	}
+
+	if !token.Valid() {
+		return statusErrorMsg{err: fmt.Errorf("token has expired")}
+	}
+
+	messages := []string{""}
+	status := ""
+	projectID := ""
+
+	schema, err := readSchemaFromConfig()
+	if err != nil {
+		messages = append(messages, fmt.Sprintf("Error reading schema: %v", err))
+	} else if schema == "" {
+		messages = append(messages, "No schema found in config files")
+	} else {
+		var schemaData map[string]interface{}
+		if err := json.Unmarshal([]byte(schema), &schemaData); err != nil {
+			messages = append(messages, fmt.Sprintf("Error parsing schema: %v", err))
+		} else {
+
+			if pid, ok := schemaData["project_id"].(string); ok {
+				messages = append(messages, fmt.Sprintf("Project ID: %s", pid))
+				projectID = pid
+				latestSchema, err := getProjectSchema(pid)
+				if err != nil && latestSchema == "" {
+					messages = append(messages, fmt.Sprintf("Error fetching latest schema: %v", err))
+				}
+
+				if latestSchema == "" {
+					// messages = append(messages, "Remote schema is em")
+
+					latestSchema = fmt.Sprintf(`{
+						"project_id": "%s",
+						"version": 0,
+						"tables": {}
+					}`, pid)
+				}
+
+				var latestSchemaData map[string]interface{}
+				if err := json.Unmarshal([]byte(latestSchema), &latestSchemaData); err != nil {
+					messages = append(messages, fmt.Sprintf("Error parsing latest schema: %v", err))
+				} else if version, ok := latestSchemaData["version"].(float64); ok {
+					messages = append(messages, fmt.Sprintf("Remote schema version: %.0f", version))
+				} else {
+					messages = append(messages, "No version found in latest schema")
+				}
+
+				if currentVersion, ok := schemaData["version"].(float64); ok {
+					if latestSchema != "" {
+						if latestVersion, ok := latestSchemaData["version"].(float64); ok {
+							if currentVersion < latestVersion {
+								messages = append(messages, fmt.Sprintf("Schema is out of date! Current: %.0f, Latest: %.0f", currentVersion, latestVersion))
+
+								messages = append(messages, "Please run 'basic pull' to update your local schema.")
+								status = "behind"
+							} else if currentVersion > latestVersion {
+								messages = append(messages, fmt.Sprintf("Changes found: Local schema version %.0f is ahead of remote version %.0f", currentVersion, latestVersion))
+
+								valid, err := validateSchema(schema)
+								if err != nil {
+									messages = append(messages, fmt.Sprintf("Error validating schema: %v", err))
+								} else if valid.Valid != nil && !*valid.Valid {
+									status = "invalid"
+									messages = append(messages, "Errors found in schema! Please fix:")
+
+									for _, err := range valid.Errors {
+										messages = append(messages, fmt.Sprintf(" - %s", err.Message))
+									}
+								} else {
+									messages = append(messages, "Schema changes are valid!")
+
+									messages = append(messages, "Please run 'basic push' if you are ready to publish your changes.")
+									status = "valid"
+								}
+							} else {
+								// TODO: confirm local schema is same as remote - compare hash
+								messages = append(messages, "Schema is up to date!")
+								status = "current"
+							}
+						}
+					}
+				} else {
+					messages = append(messages, "No version found in current schema")
+				}
+
+			} else {
+				messages = append(messages, "No project ID found in schema")
+			}
+		}
+	}
+
+	return statusMsg{text: strings.Join(messages, "\n"), status: status, schema: schema, projectID: projectID}
 }
 
 func checkLatestRelease() (string, error) {
@@ -1096,7 +1362,7 @@ func getProjectSchema(projectID string) (string, error) {
 	defer resp.Body.Close()
 
 	var response struct {
-		Data struct {
+		Data []struct {
 			Schema map[string]interface{} `json:"schema"`
 		} `json:"data"`
 	}
@@ -1105,7 +1371,11 @@ func getProjectSchema(projectID string) (string, error) {
 		return "", fmt.Errorf("error parsing JSON response: %v", err)
 	}
 
-	prettyJSON, err := json.MarshalIndent(response.Data.Schema, "\t", "\t")
+	if len(response.Data) == 0 {
+		return "", nil
+	}
+
+	prettyJSON, err := json.MarshalIndent(response.Data[0].Schema, "\t", "\t")
 	if err != nil {
 		return "", fmt.Errorf("error formatting schema JSON: %v", err)
 	}
@@ -1115,6 +1385,191 @@ func getProjectSchema(projectID string) (string, error) {
 	}
 
 	return string(prettyJSON), nil
+}
+
+func pushProjectSchema(schema string) (bool, error) {
+	// Extract project ID from schema
+	var schemaData map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaData); err != nil {
+		return false, fmt.Errorf("error parsing schema: %v", err)
+	}
+
+	projectID, ok := schemaData["project_id"].(string)
+	if !ok {
+		return false, fmt.Errorf("no project ID found in schema")
+	}
+
+	// Get auth token
+	token, err := loadToken()
+	if err != nil {
+		return false, fmt.Errorf("not logged in")
+	}
+
+	// Create request body
+	reqBody := struct {
+		Schema map[string]interface{} `json:"schema"`
+	}{
+		Schema: schemaData,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return false, fmt.Errorf("error marshaling request body: %v", err)
+	}
+
+	// Use the oauth2 client with authentication
+	client := oauthConfig.Client(context.Background(), token)
+	resp, err := client.Post("https://api.basic.tech/project/"+projectID+"/schema",
+		"application/json",
+		bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return false, fmt.Errorf("error making request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("received non-200 response: %d - %s", resp.StatusCode, string(body))
+	}
+
+	return true, nil
+}
+
+func validateSchema(schema string) (struct {
+	Valid  *bool `json:"valid,omitempty"`
+	Errors []struct {
+		Message string `json:"message"`
+		Path    string `json:"path"`
+		Change  struct {
+			Path string `json:"path"`
+		} `json:"change"`
+	} `json:"errors,omitempty"`
+	Error   *string `json:"error,omitempty"`
+	Message *string `json:"message,omitempty"`
+}, error) {
+	// Create request body
+	reqBody := struct {
+		Schema string `json:"schema"`
+	}{
+		Schema: schema,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return struct {
+			Valid  *bool `json:"valid,omitempty"`
+			Errors []struct {
+				Message string `json:"message"`
+				Path    string `json:"path"`
+				Change  struct {
+					Path string `json:"path"`
+				} `json:"change"`
+			} `json:"errors,omitempty"`
+			Error   *string `json:"error,omitempty"`
+			Message *string `json:"message,omitempty"`
+		}{}, fmt.Errorf("error marshaling request body: %v", err)
+	}
+
+	// Make request to validation endpoint
+	resp, err := http.Post("https://api.basic.tech/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return struct {
+			Valid  *bool `json:"valid,omitempty"`
+			Errors []struct {
+				Message string `json:"message"`
+				Path    string `json:"path"`
+				Change  struct {
+					Path string `json:"path"`
+				} `json:"change"`
+			} `json:"errors,omitempty"`
+			Error   *string `json:"error,omitempty"`
+			Message *string `json:"message,omitempty"`
+		}{}, fmt.Errorf("error making validation request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		// Read error response body first
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return struct {
+				Valid  *bool `json:"valid,omitempty"`
+				Errors []struct {
+					Message string `json:"message"`
+					Path    string `json:"path"`
+					Change  struct {
+						Path string `json:"path"`
+					} `json:"change"`
+				} `json:"errors,omitempty"`
+				Error   *string `json:"error,omitempty"`
+				Message *string `json:"message,omitempty"`
+			}{}, fmt.Errorf("error reading error response: %v", err)
+		}
+
+		// Reset body for later use
+		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return struct {
+				Valid  *bool `json:"valid,omitempty"`
+				Errors []struct {
+					Message string `json:"message"`
+					Path    string `json:"path"`
+					Change  struct {
+						Path string `json:"path"`
+					} `json:"change"`
+				} `json:"errors,omitempty"`
+				Error   *string `json:"error,omitempty"`
+				Message *string `json:"message,omitempty"`
+			}{}, fmt.Errorf("error decoding error response: %v", err)
+		}
+		return struct {
+			Valid  *bool `json:"valid,omitempty"`
+			Errors []struct {
+				Message string `json:"message"`
+				Path    string `json:"path"`
+				Change  struct {
+					Path string `json:"path"`
+				} `json:"change"`
+			} `json:"errors,omitempty"`
+			Error   *string `json:"error,omitempty"`
+			Message *string `json:"message,omitempty"`
+		}{}, fmt.Errorf("error: %s", errResp.Error)
+	}
+
+	var response struct {
+		Valid  *bool `json:"valid,omitempty"`
+		Errors []struct {
+			Message string `json:"message"`
+			Path    string `json:"path"`
+			Change  struct {
+				Path string `json:"path"`
+			} `json:"change"`
+		} `json:"errors,omitempty"`
+		Error   *string `json:"error,omitempty"`
+		Message *string `json:"message,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return struct {
+			Valid  *bool `json:"valid,omitempty"`
+			Errors []struct {
+				Message string `json:"message"`
+				Path    string `json:"path"`
+				Change  struct {
+					Path string `json:"path"`
+				} `json:"change"`
+			} `json:"errors,omitempty"`
+			Error   *string `json:"error,omitempty"`
+			Message *string `json:"message,omitempty"`
+		}{}, fmt.Errorf("error parsing validation response: %v", err)
+	}
+
+	return response, nil
+
 }
 
 func getProjects(token *oauth2.Token) ([]project, error) {
@@ -1179,16 +1634,71 @@ func performAccount() tea.Msg {
 	return tea.Quit()
 }
 
-func checkStatus() tea.Msg {
-	token, err := loadToken()
-	if err != nil {
-		fmt.Println("Not logged in")
-	} else if token.Valid() {
-		fmt.Println("Logged in with a valid token")
-	} else {
-		fmt.Println("Logged in, but token has expired")
+func saveSchemaToConfig(schema string) error {
+	configFiles := []string{"basic.config.ts", "basic.config.js"}
+
+	for _, filename := range configFiles {
+		content, err := os.ReadFile(filename)
+		if err == nil {
+			// Look for schema = { ... } or schema: { ... } pattern
+			re := regexp.MustCompile(`(?s)(schema[:\s]+=?\s*)({.*?})([\s;]*(?:export|\z))`)
+			matches := re.FindSubmatch(content)
+
+			if len(matches) > 0 {
+				// Replace just the schema object part while keeping the surrounding syntax
+				newContent := re.ReplaceAllString(string(content), "${1}"+schema+"${3}")
+
+				err = os.WriteFile(filename, []byte(newContent), 0644)
+				if err != nil {
+					return fmt.Errorf("error writing schema to %s: %v", filename, err)
+				}
+				return nil
+			}
+		}
 	}
-	return tea.Quit()
+
+	return fmt.Errorf("no schema found in config files")
+}
+
+func readSchemaFromConfig() (string, error) {
+	configFiles := []string{"basic.config.ts", "basic.config.js"}
+
+	for _, filename := range configFiles {
+		content, err := os.ReadFile(filename)
+		if err == nil {
+			// Look for schema = { ... } or schema: { ... } pattern
+			// Use (?s) flag to make dot match newlines
+			re := regexp.MustCompile(`(?s)schema[:\s]+=?\s*({.*?})[\s;]*(?:export|\z)`)
+			matches := re.FindSubmatch(content)
+
+			if len(matches) > 1 {
+				schemaJSON := matches[1]
+				jsonStr := string(schemaJSON)
+
+				// First convert single quotes to double quotes
+				jsonStr = strings.ReplaceAll(jsonStr, "'", "\"")
+
+				// Add quotes to unquoted object keys
+				re := regexp.MustCompile(`([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:`)
+				jsonStr = re.ReplaceAllString(jsonStr, `$1"$2":`)
+
+				// Parse and re-marshal to ensure valid JSON
+				var parsed map[string]interface{}
+				if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+					return "", fmt.Errorf("invalid schema JSON in %s: %v", filename, err)
+				}
+
+				prettyJSON, err := json.MarshalIndent(parsed, "", "  ")
+				if err != nil {
+					return "", fmt.Errorf("error formatting schema JSON: %v", err)
+				}
+
+				return string(prettyJSON), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no schema found in config files")
 }
 
 // -----------------------------//
@@ -1715,3 +2225,10 @@ func (m InitSelectionModel) View() string {
 
 // Add this variable at the package level
 var selectedOption string
+
+// Add this helper function
+func addQuotesToKeys(input string) string {
+	// Regex to find object keys that aren't quoted
+	re := regexp.MustCompile(`([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:`)
+	return re.ReplaceAllString(input, `$1"$2":`)
+}
