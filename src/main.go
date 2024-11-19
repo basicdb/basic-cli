@@ -31,8 +31,6 @@ import (
 //TODO:
 // - in main model, make messages array standard
 // - combine func for checking online, connected, and logged in
-//
-// - add interactive y/n to pull
 
 const maxWidth = 80
 
@@ -2087,6 +2085,12 @@ func loadToken() (*oauth2.Token, error) {
 		if err != nil {
 			return nil, fmt.Errorf("token has expired and refresh failed: %v", err)
 		}
+
+		refreshToken, ok := newToken.Extra("refresh").(string)
+		if !ok {
+			return nil, fmt.Errorf("failed to get refresh token: %v", err)
+		}
+		newToken.RefreshToken = refreshToken
 
 		if err := saveToken(newToken); err != nil {
 			return nil, fmt.Errorf("failed to save refreshed token: %v", err)
