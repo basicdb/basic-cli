@@ -2,6 +2,19 @@
 
 A command-line interface for interacting with the Basic API.
 
+## Docs
+
+- https://docs.basic.tech/get-started/cli
+
+
+
+## Installation
+
+```bash
+npm install -g basic-cli
+```
+
+
 ## Usage
 
 ## Available Commands
@@ -41,3 +54,8 @@ A command-line interface for interacting with the Basic API.
 
 - Make sure you're logged in using the `login` command before using commands that require authentication.
 - Use the `help` command to see this list of available commands in the CLI.
+
+Links: 
+
+- https://www.npmjs.com/package/@basictech/cli
+https://docs.basic.tech/get-started/cli
