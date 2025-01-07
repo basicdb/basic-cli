@@ -11,7 +11,7 @@ A command-line interface for interacting with the Basic API.
 ## Installation
 
 ```bash
-npm install -g basic-cli
+npm i -g @basictech/cli
 ```
 
 
