@@ -1,17 +1,16 @@
 {
   "name": "@basictech/cli",
-  "version": "0.0.12",
+  "version": "0.0.16",
   "description": "basictech cli for creating & managing your projects",
   "main": "index.js",
   "files": [
-    "dist",
     "index.js"
   ],
   "bin": {
     "basic": "./bin/basic-cli"
   },
   "scripts": {
-    "postinstall": "node ./index.js",
+    "preinstall": "node ./index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "raz@basic.tech",
