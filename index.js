@@ -98,6 +98,7 @@ const installBinary = async () => {
 const main = async () => {
   try {
     await installBinary();
+    process.exit(0);
   } catch (err) {
     console.error('Error:', err.message);
     process.exit(1);
