@@ -1208,6 +1208,12 @@ func checkStatusCmd() tea.Msg {
 	if err != nil {
 		return statusMsg{text: strings.Join([]string{
 			fmt.Sprintf("Error reading schema: %v", err),
+			func() string {
+				if strings.Contains(err.Error(), "invalid character '}'") {
+					return "Double check you have no trailing commas."
+				}
+				return ""
+			}(),
 			"Please make sure a basic config file exists and is valid",
 			"you can also run 'basic init' to create a new project or import an existing project",
 		}, "\n")}
@@ -1289,7 +1295,7 @@ func checkStatusCmd() tea.Msg {
 		if valid.Valid != nil && !*valid.Valid {
 			messages = append(messages, "Errors found in schema! Please fix:")
 			for _, err := range valid.Errors {
-				messages = append(messages, fmt.Sprintf(" - %s", err.Message))
+				messages = append(messages, fmt.Sprintf(" - %s at %s", err.Message, err.InstancePath))
 			}
 			return statusMsg{text: strings.Join(messages, "\n"), status: "invalid", schema: schema, projectID: projectID}
 		}
@@ -1612,141 +1618,70 @@ func pushProjectSchema(schema string) (bool, error) {
 	return true, nil
 }
 
-func validateSchema(schema string) (struct {
+// Add this type definition near the top of the file with other type definitions
+type SchemaValidationResponse struct {
 	Valid  *bool `json:"valid,omitempty"`
 	Errors []struct {
-		Message string `json:"message"`
-		Path    string `json:"path"`
-		Change  struct {
-			Path string `json:"path"`
-		} `json:"change"`
+		Message      string `json:"message"`
+		InstancePath string `json:"instancePath"`
+		Params       struct {
+			Field       string `json:"field"`
+			OriginTable string `json:"originTable"`
+			ProjectID   string `json:"project_id"`
+		} `json:"params"`
 	} `json:"errors,omitempty"`
 	Error   *string `json:"error,omitempty"`
 	Message *string `json:"message,omitempty"`
-}, error) {
-	// Create request body
+}
+
+// Then modify the validateSchema function to use this type
+func validateSchema(schema string) (SchemaValidationResponse, error) {
+	// Parse schema string into JSON object first
+	var schemaObj map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaObj); err != nil {
+		return SchemaValidationResponse{}, fmt.Errorf("error parsing schema JSON: %v", err)
+	}
+
+	// Create request body with JSON object
 	reqBody := struct {
-		Schema string `json:"schema"`
+		Schema map[string]interface{} `json:"schema"`
 	}{
-		Schema: schema,
+		Schema: schemaObj,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return struct {
-			Valid  *bool `json:"valid,omitempty"`
-			Errors []struct {
-				Message string `json:"message"`
-				Path    string `json:"path"`
-				Change  struct {
-					Path string `json:"path"`
-				} `json:"change"`
-			} `json:"errors,omitempty"`
-			Error   *string `json:"error,omitempty"`
-			Message *string `json:"message,omitempty"`
-		}{}, fmt.Errorf("error marshaling request body: %v", err)
+		return SchemaValidationResponse{}, fmt.Errorf("error marshaling request body: %v", err)
 	}
 
-	// Make request to validation endpoint
-	resp, err := http.Post("https://api.basic.tech/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
+	resp, err := http.Post("http://localhost:3000/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return struct {
-			Valid  *bool `json:"valid,omitempty"`
-			Errors []struct {
-				Message string `json:"message"`
-				Path    string `json:"path"`
-				Change  struct {
-					Path string `json:"path"`
-				} `json:"change"`
-			} `json:"errors,omitempty"`
-			Error   *string `json:"error,omitempty"`
-			Message *string `json:"message,omitempty"`
-		}{}, fmt.Errorf("error making validation request: %v", err)
+		return SchemaValidationResponse{}, fmt.Errorf("error making validation request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read error response body first
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return struct {
-				Valid  *bool `json:"valid,omitempty"`
-				Errors []struct {
-					Message string `json:"message"`
-					Path    string `json:"path"`
-					Change  struct {
-						Path string `json:"path"`
-					} `json:"change"`
-				} `json:"errors,omitempty"`
-				Error   *string `json:"error,omitempty"`
-				Message *string `json:"message,omitempty"`
-			}{}, fmt.Errorf("error reading error response: %v", err)
+			return SchemaValidationResponse{}, fmt.Errorf("error reading error response: %v", err)
 		}
-
-		// Reset body for later use
 		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 		var errResp struct {
 			Error string `json:"error"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
-			return struct {
-				Valid  *bool `json:"valid,omitempty"`
-				Errors []struct {
-					Message string `json:"message"`
-					Path    string `json:"path"`
-					Change  struct {
-						Path string `json:"path"`
-					} `json:"change"`
-				} `json:"errors,omitempty"`
-				Error   *string `json:"error,omitempty"`
-				Message *string `json:"message,omitempty"`
-			}{}, fmt.Errorf("error decoding error response: %v", err)
+			return SchemaValidationResponse{}, fmt.Errorf("error decoding error response: %v", err)
 		}
-		return struct {
-			Valid  *bool `json:"valid,omitempty"`
-			Errors []struct {
-				Message string `json:"message"`
-				Path    string `json:"path"`
-				Change  struct {
-					Path string `json:"path"`
-				} `json:"change"`
-			} `json:"errors,omitempty"`
-			Error   *string `json:"error,omitempty"`
-			Message *string `json:"message,omitempty"`
-		}{}, fmt.Errorf("error: %s", errResp.Error)
+		return SchemaValidationResponse{}, fmt.Errorf("error: %s", errResp.Error)
 	}
 
-	var response struct {
-		Valid  *bool `json:"valid,omitempty"`
-		Errors []struct {
-			Message string `json:"message"`
-			Path    string `json:"path"`
-			Change  struct {
-				Path string `json:"path"`
-			} `json:"change"`
-		} `json:"errors,omitempty"`
-		Error   *string `json:"error,omitempty"`
-		Message *string `json:"message,omitempty"`
-	}
-
+	var response SchemaValidationResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return struct {
-			Valid  *bool `json:"valid,omitempty"`
-			Errors []struct {
-				Message string `json:"message"`
-				Path    string `json:"path"`
-				Change  struct {
-					Path string `json:"path"`
-				} `json:"change"`
-			} `json:"errors,omitempty"`
-			Error   *string `json:"error,omitempty"`
-			Message *string `json:"message,omitempty"`
-		}{}, fmt.Errorf("error parsing validation response: %v", err)
+		return SchemaValidationResponse{}, fmt.Errorf("error parsing validation response: %v", err)
 	}
 
 	return response, nil
-
 }
 
 func getProjects(token *oauth2.Token) ([]project, error) {
