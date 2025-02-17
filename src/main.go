@@ -59,7 +59,7 @@ type Styles struct {
 func createConfigFile(name string, projectID string, option string, schema string) error {
 	defaultSchema := fmt.Sprintf(`{
 		"project_id": "%s",
-		"version": 1,
+		"version": 0,
 		"tables": {
 			"example": {
 				"name": "example",
@@ -82,10 +82,9 @@ func createConfigFile(name string, projectID string, option string, schema strin
 	content := fmt.Sprintf(`
 // Basic Project Configuration
 // see  the docs for more info: https://docs.basic.tech
-export const config = {
-  name: "%s",
-  project_id: "%s"
-};
+
+// Project: %s
+// Link: https://app.basic.tech/project/%s
 
 export const schema = %s;
 `, name, projectID, schema)
@@ -353,6 +352,37 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			schema = gotSchema
+
+		}
+
+		existing, _ := readSchemaFromConfig()
+		if existing != "" {
+			existingProjectID := func() string {
+				var schemaObj map[string]interface{}
+				if err := json.Unmarshal([]byte(existing), &schemaObj); err == nil {
+					if projectID, ok := schemaObj["project_id"].(string); ok && projectID != "" {
+						return projectID
+					}
+				}
+				return ""
+			}()
+
+			if existingProjectID != "" {
+				return m, func() tea.Msg {
+					return errorMsg{err: fmt.Errorf("a basic.config already exists in this directory\nProject ID: %s", existingProjectID)}
+				}
+			}
+			var existingSchema map[string]interface{}
+			if err := json.Unmarshal([]byte(existing), &existingSchema); err == nil {
+				existingSchema["project_id"] = msg.projectID
+				if updatedSchema, err := json.MarshalIndent(existingSchema, "", "  "); err == nil {
+					schema = string(updatedSchema)
+				} else {
+					schema = existing
+				}
+			} else {
+				schema = existing
+			}
 
 		}
 
@@ -906,15 +936,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			if _, err := os.Stat("basic.config.ts"); err == nil {
-				return m, func() tea.Msg {
-					m.state = stateError
-					return errorScreenMsg{errorMessage: "basic.config.ts already exists in this directory"}
-				}
-			}
-			if _, err := os.Stat("basic.config.js"); err == nil {
-				return m, func() tea.Msg {
-					return errorScreenMsg{errorMessage: "basic.config.js already exists in this directory"}
+			schema, _ := readSchemaFromConfig()
+			if schema != "" {
+				var schemaData map[string]interface{}
+				if err := json.Unmarshal([]byte(schema), &schemaData); err == nil {
+					if projectID, ok := schemaData["project_id"].(string); ok && projectID != "" {
+						return m, func() tea.Msg {
+							return errorScreenMsg{errorMessage: fmt.Sprintf("A basic.config already exists in this directory\nProject ID: %s", projectID)}
+						}
+					}
 				}
 			}
 
@@ -1749,6 +1779,18 @@ func performAccount() tea.Msg {
 func saveSchemaToConfig(schema string) error {
 	configFiles := []string{"basic.config.ts", "basic.config.js"}
 
+	// Parse the schema to ensure it's valid JSON
+	var schemaObj map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaObj); err != nil {
+		return fmt.Errorf("invalid schema JSON: %v", err)
+	}
+
+	// Format the schema with proper indentation
+	prettySchema, err := json.MarshalIndent(schemaObj, "\t", "\t")
+	if err != nil {
+		return fmt.Errorf("error formatting schema: %v", err)
+	}
+
 	for _, filename := range configFiles {
 		content, err := os.ReadFile(filename)
 		if err == nil {
@@ -1758,7 +1800,7 @@ func saveSchemaToConfig(schema string) error {
 
 			if len(matches) > 0 {
 				// Replace just the schema object part while keeping the surrounding syntax
-				newContent := re.ReplaceAllString(string(content), "${1}"+schema+"${3}")
+				newContent := re.ReplaceAllString(string(content), "${1}"+string(prettySchema)+"${3}")
 
 				err = os.WriteFile(filename, []byte(newContent), 0644)
 				if err != nil {
