@@ -155,6 +155,7 @@ type FormModel struct {
 	projectCreated bool
 	fileCreated    bool
 	projects       []project
+	done          bool
 }
 
 func min(x, y int) int {
@@ -182,7 +183,7 @@ type formSuccessMsg struct {
 }
 
 func NewFormModel() FormModel {
-	m := FormModel{width: maxWidth}
+	m := FormModel{width: maxWidth, done: true}
 	m.screen = "form"
 	m.formStage = "select"
 	m.lg = lipgloss.DefaultRenderer()
@@ -256,7 +257,8 @@ func NewFormModel() FormModel {
 				Key("done").
 				Title("All done?").
 				Affirmative("Yep!").
-				Negative("Wait, no"),
+				Negative("Wait, no").
+				Value(&m.done),
 		).WithHideFunc(func() bool {
 			return m.createOption == "existing"
 		}),
@@ -284,7 +286,8 @@ func NewFormModel() FormModel {
 				Key("done").
 				Title("All done?").
 				Affirmative("Yep!").
-				Negative("Wait, no"),
+				Negative("Wait, no").
+				Value(&m.done),
 		).WithHideFunc(func() bool {
 			return m.createOption == "new"
 		}),
@@ -446,6 +449,10 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.form.State == huh.StateCompleted {
+		if !m.form.GetBool("done") {
+			m = NewFormModel()
+			return m, nil
+		}
 
 		m.screen = "loading"
 		cmds = append(cmds, func() tea.Msg {
@@ -1857,7 +1864,7 @@ func readSchemaFromConfig() (string, error) {
 
 // -----------------------------//
 //   🙅 AUTH METHODS            //
-// -----------------------------//\
+// -----------------------------//
 
 func performLogin() tea.Msg {
 	token, err := loadToken()
