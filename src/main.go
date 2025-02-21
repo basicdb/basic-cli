@@ -155,7 +155,7 @@ type FormModel struct {
 	projectCreated bool
 	fileCreated    bool
 	projects       []project
-	done          bool
+	done           bool
 }
 
 func min(x, y int) int {
@@ -1784,37 +1784,59 @@ func performAccount() tea.Msg {
 }
 
 func saveSchemaToConfig(schema string) error {
+	// First unquote valid JavaScript identifiers
+	re := regexp.MustCompile(`"([a-zA-Z_$][a-zA-Z0-9_$]*)"\s*:`)
+	schema = re.ReplaceAllString(schema, "$1:")
+
 	configFiles := []string{"basic.config.ts", "basic.config.js"}
-
-	// Parse the schema to ensure it's valid JSON
-	var schemaObj map[string]interface{}
-	if err := json.Unmarshal([]byte(schema), &schemaObj); err != nil {
-		return fmt.Errorf("invalid schema JSON: %v", err)
-	}
-
-	// Format the schema with proper indentation
-	prettySchema, err := json.MarshalIndent(schemaObj, "\t", "\t")
-	if err != nil {
-		return fmt.Errorf("error formatting schema: %v", err)
-	}
 
 	for _, filename := range configFiles {
 		content, err := os.ReadFile(filename)
 		if err == nil {
-			// Look for schema = { ... } or schema: { ... } pattern
-			re := regexp.MustCompile(`(?s)(schema[:\s]+=?\s*)({.*?})([\s;]*(?:export|\z))`)
-			matches := re.FindSubmatch(content)
+			contentStr := string(content)
 
-			if len(matches) > 0 {
-				// Replace just the schema object part while keeping the surrounding syntax
-				newContent := re.ReplaceAllString(string(content), "${1}"+string(prettySchema)+"${3}")
-
-				err = os.WriteFile(filename, []byte(newContent), 0644)
-				if err != nil {
-					return fmt.Errorf("error writing schema to %s: %v", filename, err)
-				}
-				return nil
+			// Find the start of the schema object
+			schemaStart := strings.Index(contentStr, "schema = {")
+			if schemaStart == -1 {
+				schemaStart = strings.Index(contentStr, "schema: {")
 			}
+			if schemaStart == -1 {
+				continue
+			}
+
+			// Find the position of the first {
+			objStart := strings.Index(contentStr[schemaStart:], "{")
+			if objStart == -1 {
+				continue
+			}
+			objStart += schemaStart
+
+			// Now find the matching closing brace
+			stack := 1
+			objEnd := -1
+			for i := objStart + 1; i < len(contentStr); i++ {
+				if contentStr[i] == '{' {
+					stack++
+				} else if contentStr[i] == '}' {
+					stack--
+					if stack == 0 {
+						objEnd = i + 1
+						break
+					}
+				}
+			}
+
+			if objEnd == -1 {
+				continue
+			}
+
+			// Replace the schema object with the new schema
+			newContent := contentStr[:objStart] + schema + contentStr[objEnd:]
+			err = os.WriteFile(filename, []byte(newContent), 0644)
+			if err != nil {
+				return fmt.Errorf("error writing schema to %s: %v", filename, err)
+			}
+			return nil
 		}
 	}
 
@@ -1827,35 +1849,95 @@ func readSchemaFromConfig() (string, error) {
 	for _, filename := range configFiles {
 		content, err := os.ReadFile(filename)
 		if err == nil {
-			// Look for schema = { ... } or schema: { ... } pattern
-			// Use (?s) flag to make dot match newlines
-			re := regexp.MustCompile(`(?s)schema[:\s]+=?\s*({.*?})[\s;]*(?:export|\z)`)
-			matches := re.FindSubmatch(content)
+			contentStr := string(content)
 
-			if len(matches) > 1 {
-				schemaJSON := matches[1]
-				jsonStr := string(schemaJSON)
+			// Find the start of the schema object
+			schemaStart := strings.Index(contentStr, "schema = {")
+			if schemaStart == -1 {
+				schemaStart = strings.Index(contentStr, "schema: {")
+			}
+			if schemaStart == -1 {
+				continue
+			}
 
-				// First convert single quotes to double quotes
-				jsonStr = strings.ReplaceAll(jsonStr, "'", "\"")
+			// Find the position of the first {
+			objStart := strings.Index(contentStr[schemaStart:], "{")
+			if objStart == -1 {
+				continue
+			}
+			objStart += schemaStart
 
-				// Add quotes to unquoted object keys
-				re := regexp.MustCompile(`([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:`)
-				jsonStr = re.ReplaceAllString(jsonStr, `$1"$2":`)
-
-				// Parse and re-marshal to ensure valid JSON
-				var parsed map[string]interface{}
-				if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-					return "", fmt.Errorf("invalid schema JSON in %s: %v", filename, err)
+			// Now find the matching closing brace
+			stack := 1
+			objEnd := -1
+			for i := objStart + 1; i < len(contentStr); i++ {
+				if contentStr[i] == '{' {
+					stack++
+				} else if contentStr[i] == '}' {
+					stack--
+					if stack == 0 {
+						objEnd = i + 1
+						break
+					}
 				}
+			}
 
-				prettyJSON, err := json.MarshalIndent(parsed, "", "  ")
+			if objEnd == -1 {
+				continue
+			}
+
+			// Extract just the object part
+			jsonStr := contentStr[objStart:objEnd]
+
+			// Clean up the JSON string
+			jsonStr = strings.TrimSpace(jsonStr)
+
+			// Remove trailing commas before any closing brace or bracket
+			jsonStr = regexp.MustCompile(`,(\s*[}\]])}`).ReplaceAllString(jsonStr, "$1")
+
+			// Remove any extra whitespace around colons
+			jsonStr = regexp.MustCompile(`\s*:\s*`).ReplaceAllString(jsonStr, ":")
+
+			// Add quotes to unquoted object keys
+			re := regexp.MustCompile(`([\[{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:`)
+			for i := 0; i < 10; i++ { // Handle nested objects up to 10 levels deep
+				jsonStr = re.ReplaceAllString(jsonStr, `$1"$2":`)
+			}
+
+			// Convert single quotes to double quotes
+			jsonStr = strings.ReplaceAll(jsonStr, "'", "\"")
+
+			// Remove all trailing commas in a more aggressive way
+			jsonStr = regexp.MustCompile(`,(\s*[}\]])}`).ReplaceAllString(jsonStr, "$1")
+			jsonStr = regexp.MustCompile(`,\s*}`).ReplaceAllString(jsonStr, "}")
+
+			// Normalize whitespace
+			var obj interface{}
+			if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
+				// Re-marshal with proper indentation
+				prettyJSON, err := json.MarshalIndent(obj, "", "  ")
 				if err != nil {
 					return "", fmt.Errorf("error formatting schema JSON: %v", err)
 				}
 
 				return string(prettyJSON), nil
 			}
+
+			// Try to compact the JSON first to remove any problematic whitespace
+			jsonStr = regexp.MustCompile(`\s+`).ReplaceAllString(jsonStr, " ")
+			// Try one more time to remove trailing commas after compacting
+			jsonStr = regexp.MustCompile(`,\s*([}\]])`).ReplaceAllString(jsonStr, "$1")
+			if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
+				// Re-marshal with proper indentation
+				prettyJSON, err := json.MarshalIndent(obj, "", "  ")
+				if err != nil {
+					return "", fmt.Errorf("error formatting schema JSON: %v", err)
+				}
+
+				return string(prettyJSON), nil
+			}
+
+			return "", fmt.Errorf("invalid schema JSON in %s: %v\nJSON: %s", filename, err, jsonStr)
 		}
 	}
 
