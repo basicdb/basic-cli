@@ -62,7 +62,6 @@ func createConfigFile(name string, projectID string, option string, schema strin
 		"version": 0,
 		"tables": {
 			"example": {
-				"name": "example",
 				"type": "collection",
 				"fields": {
 					"value": {
@@ -1343,8 +1342,29 @@ func checkStatusCmd() tea.Msg {
 		return statusMsg{text: strings.Join(messages, "\n"), status: "valid", schema: schema, projectID: projectID}
 	}
 
-	if currentVersion == latestVersion {
+	if currentVersion == 0 && latestVersion == 0 {
+		valid, err := validateSchema(schema)
+		if err != nil {
+			messages = append(messages, fmt.Sprintf("Error validating schema: %v", err))
+			return statusMsg{text: strings.Join(messages, "\n"), projectID: projectID}
+		}
 
+		if valid.Valid != nil && !*valid.Valid {
+			messages = append(messages, "Errors found in schema! Please fix:")
+			for _, err := range valid.Errors {
+				messages = append(messages, fmt.Sprintf(" - %s at %s", err.Message, err.InstancePath))
+			}
+			return statusMsg{text: strings.Join(messages, "\n"), status: "invalid", schema: schema, projectID: projectID}
+		}
+
+		messages = append(messages, "",
+			"Schema changes are valid!",
+			"Please increment your version number to 1",
+			"and run 'basic push' if you are ready to publish your changes.")
+		return statusMsg{text: strings.Join(messages, "\n"), status: "invalid", schema: schema, projectID: projectID}
+	}
+
+	if currentVersion == latestVersion {
 		valid, err := checkSchemaConflict(schema)
 		if err != nil {
 			messages = append(messages, fmt.Sprintf("Error checking schema conflict: %v", err))
@@ -1691,7 +1711,7 @@ func validateSchema(schema string) (SchemaValidationResponse, error) {
 		return SchemaValidationResponse{}, fmt.Errorf("error marshaling request body: %v", err)
 	}
 
-	resp, err := http.Post("http://localhost:3000/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
+	resp, err := http.Post("http://api.basic.tech/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return SchemaValidationResponse{}, fmt.Errorf("error making validation request: %v", err)
 	}
