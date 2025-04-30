@@ -1,6 +1,6 @@
 {
   "name": "@basictech/cli",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "basictech cli for creating & managing your projects",
   "main": "index.js",
   "files": [
