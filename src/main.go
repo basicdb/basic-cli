@@ -612,6 +612,19 @@ type newProjectMsg struct {
 	err         error
 }
 
+func generateRandomTeamName() string {
+	// Generate a random number between 1000 and 9999 using crypto/rand
+	b := make([]byte, 2)
+	_, err := rand.Read(b)
+	if err != nil {
+		// Fallback to a timestamp-based name if crypto/rand fails
+		return fmt.Sprintf("team-%d", time.Now().UnixNano())
+	}
+	randomNum := int(b[0])<<8 | int(b[1])
+	randomNum = (randomNum % 9000) + 1000
+	return fmt.Sprintf("team-%d", randomNum)
+}
+
 func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 	// Get the token
 	token, err := loadToken()
@@ -627,16 +640,75 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 
 	client := oauthConfig.Client(context.Background(), token)
 
+	// Fetch the user's teams
+	resp, err := client.Get("https://api.basic.tech/team")
+	if err != nil {
+		return newProjectMsg{err: fmt.Errorf("error fetching teams: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	var teamsResponse struct {
+		Data []team `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&teamsResponse); err != nil {
+		return newProjectMsg{err: fmt.Errorf("error decoding teams response: %v", err)}
+	}
+
+	var teamID string
+	if len(teamsResponse.Data) == 0 {
+		// Create a new default team
+		teamName := generateRandomTeamName()
+		teamSlug := generateSlugFromName(teamName)
+
+		teamPayload := map[string]string{
+			"name": teamName,
+			"slug": teamSlug,
+		}
+		jsonPayload, err := json.Marshal(teamPayload)
+		if err != nil {
+			return newProjectMsg{err: fmt.Errorf("error creating team payload: %v", err)}
+		}
+
+		resp, err = client.Post("https://api.basic.tech/team", "application/json", bytes.NewBuffer(jsonPayload))
+		if err != nil {
+			return newProjectMsg{err: fmt.Errorf("error creating team: %v", err)}
+		}
+		defer resp.Body.Close()
+
+		var teamResponse struct {
+			Data struct {
+				ID        string    `json:"id"`
+				Name      string    `json:"name"`
+				Slug      string    `json:"slug"`
+				CreatedAt time.Time `json:"created_at"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&teamResponse); err != nil {
+			return newProjectMsg{err: fmt.Errorf("error decoding team response: %v", err)}
+		}
+
+		if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			return newProjectMsg{err: fmt.Errorf("API error creating team: %s - %s", resp.Status, string(body))}
+		}
+
+		teamID = teamResponse.Data.ID
+	} else {
+		// Use the first team's ID
+		teamID = teamsResponse.Data[0].ID
+	}
+
 	payload := map[string]string{
-		"name": projectName,
-		"slug": generateSlugFromName(projectSlug),
+		"name":    projectName,
+		"slug":    generateSlugFromName(projectSlug),
+		"team_id": teamID,
 	}
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
 		return newProjectMsg{err: fmt.Errorf("error creating JSON payload: %v", err)}
 	}
 
-	resp, err := client.Post("https://api.basic.tech/project/new", "application/json", bytes.NewBuffer(jsonPayload))
+	resp, err = client.Post("https://api.basic.tech/project", "application/json", bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return newProjectMsg{err: fmt.Errorf("error creating new project: %v", err)}
 	}
@@ -644,11 +716,10 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 
 	var responseBody struct {
 		Data struct {
-			ID       string  `json:"id"`
-			Owner    string  `json:"owner"`
-			Name     string  `json:"name"`
-			Website  *string `json:"website"`
-			IsPublic bool    `json:"is_public"`
+			ID        string    `json:"id"`
+			Name      string    `json:"name"`
+			Slug      string    `json:"slug"`
+			CreatedAt time.Time `json:"created_at"`
 		} `json:"data"`
 	}
 	err = json.NewDecoder(resp.Body).Decode(&responseBody)
@@ -657,7 +728,7 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 	}
 	projectID := responseBody.Data.ID
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return newProjectMsg{err: fmt.Errorf("API error: %s - %s", resp.Status, string(body))}
 	}
@@ -1594,6 +1665,14 @@ type project struct {
 	Website string
 }
 
+type team struct {
+	ID       string
+	Name     string
+	Slug     string
+	Roles    string
+	RoleName string
+}
+
 func getProjectSchema(projectID string) (string, error) {
 	resp, err := http.Get("https://api.basic.tech/project/" + projectID + "/schema")
 	if err != nil {
@@ -1743,7 +1822,7 @@ func validateSchema(schema string) (SchemaValidationResponse, error) {
 
 func getProjects(token *oauth2.Token) ([]project, error) {
 	client := oauthConfig.Client(context.Background(), token)
-	resp, err := client.Get("https://api.basic.tech/account/projects")
+	resp, err := client.Get("https://api.basic.tech/project")
 	if err != nil {
 		return nil, fmt.Errorf("error fetching projects: %v", err)
 	}
@@ -1768,7 +1847,7 @@ func getProjects(token *oauth2.Token) ([]project, error) {
 
 func getProjectsMsg(token *oauth2.Token) tea.Msg {
 	client := oauthConfig.Client(context.Background(), token)
-	resp, err := client.Get("https://api.basic.tech/account/projects")
+	resp, err := client.Get("https://api.basic.tech/project")
 	if err != nil {
 		return projectsMsg{err: fmt.Errorf("error fetching projects: %v", err)}
 	}
