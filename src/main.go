@@ -43,7 +43,7 @@ var (
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
-	version         = "0.0.20"
+	version         = "0.0.21"
 )
 
 type Styles struct {
@@ -1475,7 +1475,7 @@ func checkSchemaConflict(schema string) (bool, error) {
 	}
 
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://api.basic.tech/schema/compareSchema", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", "https://api.basic.tech/utils/schema/compareSchema", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return false, fmt.Errorf("error creating request: %v", err)
 	}
@@ -1790,7 +1790,7 @@ func validateSchema(schema string) (SchemaValidationResponse, error) {
 		return SchemaValidationResponse{}, fmt.Errorf("error marshaling request body: %v", err)
 	}
 
-	resp, err := http.Post("http://api.basic.tech/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
+	resp, err := http.Post("http://api.basic.tech/utils/schema/verifyUpdateSchema", "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return SchemaValidationResponse{}, fmt.Errorf("error making validation request: %v", err)
 	}
