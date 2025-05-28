@@ -43,7 +43,7 @@ var (
 const (
 	basicCliDirName = ".basic-cli"
 	tokenFileName   = "token.json"
-	version         = "0.0.21"
+	version         = "0.0.22"
 )
 
 type Styles struct {
@@ -253,36 +253,36 @@ func NewFormModel(createOption string, projectName string, configOption string) 
 			return m.createOption == "existing"
 		}),
 
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Key("id").
-					Title("Select Project").
-					// Options(huh.NewOptions(options...)...).
-					Options(options...).
-					Height(10).
-					Validate(func(v string) error {
-						if v == "" {
-							return fmt.Errorf("project is required")
-						}
-						return nil
-					}),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Key("id").
+				Title("Select Project").
+				// Options(huh.NewOptions(options...)...).
+				Options(options...).
+				Height(10).
+				Validate(func(v string) error {
+					if v == "" {
+						return fmt.Errorf("project is required")
+					}
+					return nil
+				}),
 
-				huh.NewSelect[string]().
-					Key("option").
-					Title("Generate config file?").
-					Value(&m.configOption).
-					Options(huh.NewOptions("typescript", "javascript", "none")...),
+			huh.NewSelect[string]().
+				Key("option").
+				Title("Generate config file?").
+				Value(&m.configOption).
+				Options(huh.NewOptions("typescript", "javascript", "none")...),
 
-				huh.NewConfirm().
-					Key("done").
-					Title("All done?").
-					Affirmative("Yep!").
-					Negative("Wait, no").
-					Value(&m.done),
-			).WithHideFunc(func() bool {
-				return m.createOption == "new"
-			}),
-		).
+			huh.NewConfirm().
+				Key("done").
+				Title("All done?").
+				Affirmative("Yep!").
+				Negative("Wait, no").
+				Value(&m.done),
+		).WithHideFunc(func() bool {
+			return m.createOption == "new"
+		}),
+	).
 		WithWidth(45).
 		WithShowHelp(false).
 		WithShowErrors(false).
@@ -292,12 +292,12 @@ func NewFormModel(createOption string, projectName string, configOption string) 
 	// If createOption is 'new', advance to the next group to skip the first step
 	if createOption == "new" {
 		m.form.NextGroup()
-		
+
 		// If all required values are provided, skip the form entirely
 		if projectName != "" && configOption != "" {
 			m.done = true
-			m.screen = "loading"  // Skip showing the form
-			m.formStage = "new"   // Set the correct stage for project creation
+			m.screen = "loading" // Skip showing the form
+			m.formStage = "new"  // Set the correct stage for project creation
 		} else {
 			// Count how many fields we need to skip based on provided flags
 			fieldsToSkip := 0
@@ -307,7 +307,7 @@ func NewFormModel(createOption string, projectName string, configOption string) 
 			if configOption != "" {
 				fieldsToSkip++ // Skip the config option field
 			}
-			
+
 			// Advance past the pre-filled fields
 			for i := 0; i < fieldsToSkip; i++ {
 				m.form.NextField()
@@ -327,7 +327,7 @@ func (m FormModel) Init() tea.Cmd {
 			}
 		}
 	}
-	
+
 	// Temporary bugfix to make input field is focused:
 	m.form.NextField()
 	m.form.PrevField()
@@ -767,7 +767,7 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 
 type model struct {
 	choice       string
-	args         []string  // Add this field
+	args         []string // Add this field
 	form         *huh.Form
 	state        programState
 	loading      bool
