@@ -181,7 +181,7 @@ type formSuccessMsg struct {
 	projectID   string
 }
 
-func NewFormModel() FormModel {
+func NewFormModel(createOption string, projectName string, configOption string) FormModel {
 	m := FormModel{width: maxWidth, done: true}
 	m.screen = "form"
 	m.formStage = "select"
@@ -192,7 +192,9 @@ func NewFormModel() FormModel {
 	keyMap.Quit.SetKeys("esc", "ctrl+c")
 
 	m.formStage = "select"
-	m.createOption = ""
+	m.createOption = createOption
+	m.projectName = projectName
+	m.configOption = configOption
 
 	token, err := loadToken()
 	if err != nil {
@@ -206,24 +208,11 @@ func NewFormModel() FormModel {
 		return FormModel{}
 	}
 	m.projects = projects
-	// type projectOption struct {
-	// 	Name string
-	// 	ID   string
-	// }
-	// options := []projectOption{}
-	// for _, project := range projects {
-	// 	options = append(options, projectOption{
-	// 		Name: project.Name,
-	// 		ID:   project.ID,
-	// 	})
-	// }
 
 	options := []huh.Option[string]{}
 	for _, project := range projects {
 		options = append(options, huh.NewOption(project.Name, project.ID))
 	}
-
-	// var selection string
 
 	m.form = huh.NewForm(
 		huh.NewGroup(
@@ -234,12 +223,13 @@ func NewFormModel() FormModel {
 					huh.NewOption("Use existing project", "existing"),
 				).
 				Value(&m.createOption),
-		),
+		).WithHideFunc(func() bool { return createOption == "new" }),
 
 		huh.NewGroup(
 			huh.NewInput().
 				Key("name").
 				Title("Project Name").
+				Value(&m.projectName).
 				Validate(func(v string) error {
 					if v == "" {
 						return fmt.Errorf("project name is required")
@@ -250,6 +240,7 @@ func NewFormModel() FormModel {
 			huh.NewSelect[string]().
 				Key("option").
 				Title("Generate config file?").
+				Value(&m.configOption).
 				Options(huh.NewOptions("typescript", "javascript", "none")...),
 
 			huh.NewConfirm().
@@ -262,45 +253,81 @@ func NewFormModel() FormModel {
 			return m.createOption == "existing"
 		}),
 
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Key("id").
-				Title("Select Project").
-				// Options(huh.NewOptions(options...)...).
-				Options(options...).
-				Height(10).
-				Validate(func(v string) error {
-					if v == "" {
-						return fmt.Errorf("project is required")
-					}
-					return nil
-				}),
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Key("id").
+					Title("Select Project").
+					// Options(huh.NewOptions(options...)...).
+					Options(options...).
+					Height(10).
+					Validate(func(v string) error {
+						if v == "" {
+							return fmt.Errorf("project is required")
+						}
+						return nil
+					}),
 
-			huh.NewSelect[string]().
-				Key("option").
-				Title("Generate config file?").
-				Options(huh.NewOptions("typescript", "javascript", "none")...),
+				huh.NewSelect[string]().
+					Key("option").
+					Title("Generate config file?").
+					Value(&m.configOption).
+					Options(huh.NewOptions("typescript", "javascript", "none")...),
 
-			huh.NewConfirm().
-				Key("done").
-				Title("All done?").
-				Affirmative("Yep!").
-				Negative("Wait, no").
-				Value(&m.done),
-		).WithHideFunc(func() bool {
-			return m.createOption == "new"
-		}),
-	).
+				huh.NewConfirm().
+					Key("done").
+					Title("All done?").
+					Affirmative("Yep!").
+					Negative("Wait, no").
+					Value(&m.done),
+			).WithHideFunc(func() bool {
+				return m.createOption == "new"
+			}),
+		).
 		WithWidth(45).
 		WithShowHelp(false).
 		WithShowErrors(false).
 		WithKeyMap(keyMap)
 
 	m.form.Init()
+	// If createOption is 'new', advance to the next group to skip the first step
+	if createOption == "new" {
+		m.form.NextGroup()
+		
+		// If all required values are provided, skip the form entirely
+		if projectName != "" && configOption != "" {
+			m.done = true
+			m.screen = "loading"  // Skip showing the form
+			m.formStage = "new"   // Set the correct stage for project creation
+		} else {
+			// Count how many fields we need to skip based on provided flags
+			fieldsToSkip := 0
+			if projectName != "" {
+				fieldsToSkip++ // Skip the name field
+			}
+			if configOption != "" {
+				fieldsToSkip++ // Skip the config option field
+			}
+			
+			// Advance past the pre-filled fields
+			for i := 0; i < fieldsToSkip; i++ {
+				m.form.NextField()
+			}
+		}
+	}
 	return m
 }
 
 func (m FormModel) Init() tea.Cmd {
+	// If all values are pre-filled, immediately submit the form
+	if m.done && m.projectName != "" && m.configOption != "" && m.createOption == "new" {
+		return func() tea.Msg {
+			return formSubmittedMsg{
+				name:   m.projectName,
+				option: m.configOption,
+			}
+		}
+	}
+	
 	// Temporary bugfix to make input field is focused:
 	m.form.NextField()
 	m.form.PrevField()
@@ -449,7 +476,7 @@ func (m FormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.form.State == huh.StateCompleted {
 		if !m.form.GetBool("done") {
-			m = NewFormModel()
+			m = NewFormModel(m.createOption, m.projectName, m.configOption)
 			return m, nil
 		}
 
@@ -740,6 +767,7 @@ func createNewProjectMsg(projectName string, projectSlug string) tea.Msg {
 
 type model struct {
 	choice       string
+	args         []string  // Add this field
 	form         *huh.Form
 	state        programState
 	loading      bool
@@ -807,21 +835,23 @@ func main() {
 	}
 
 	command := os.Args[1]
+	args := os.Args[2:]
 
-	p := tea.NewProgram(initialModel(command))
+	p := tea.NewProgram(initialModel(command, args))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func initialModel(command string) model {
+func initialModel(command string, args []string) model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	m := model{
 		choice:  command,
+		args:    args,
 		loading: false,
 		spinner: s,
 	}
@@ -1025,8 +1055,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			return NewFormModel(), func() tea.Msg {
-				return projectFormMsg{projectName: "test"}
+			// Parse flags
+			var projectName string
+			var configOption string
+			skipNewStep := false
+			for i := 0; i < len(m.args); i++ {
+				switch m.args[i] {
+				case "--new":
+					skipNewStep = true
+				case "--name":
+					if i+1 < len(m.args) {
+						projectName = m.args[i+1]
+						i++ // Skip the next argument since we've used it
+					}
+				case "--js":
+					configOption = "javascript"
+				case "--ts":
+					configOption = "typescript"
+				}
+			}
+
+			var formModel FormModel
+			if skipNewStep {
+				formModel = NewFormModel("new", projectName, configOption)
+				formModel.formStage = "new"
+			} else {
+				formModel = NewFormModel("", projectName, configOption)
+			}
+
+			return formModel, func() tea.Msg {
+				return projectFormMsg{projectName: projectName}
 			}
 		case "debug":
 			configDir := filepath.Join(os.Getenv("HOME"), basicCliDirName)
@@ -1209,6 +1267,10 @@ func (m model) View() string {
 		b += "  pull - Pull schema from remote\n"
 		b += "  projects - list your projects\n"
 		b += "  init - Create a new project or import an existing project\n"
+		b += "    --new - Skip the project type selection step\n"
+		b += "    --name <projectname> - Specify project name\n"
+		b += "    --js - Use JavaScript for config file\n"
+		b += "    --ts - Use TypeScript for config file\n"
 		b += "  version - Show CLI version\n"
 		b += "  update - Update CLI to the latest version\n"
 		b += "  debug - Show Basic config directory location\n"
