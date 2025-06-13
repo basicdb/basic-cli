@@ -1,19 +1,79 @@
 {
   "name": "@basictech/cli",
-  "version": "0.0.22",
-  "description": "basictech cli for creating & managing your projects",
-  "main": "index.js",
-  "files": [
-    "index.js"
-  ],
+  "version": "0.0.33",
+  "type": "module",
+  "description": "Basic CLI for creating & managing your projects",
+  "main": "dist/index.js",
   "bin": {
-    "basic": "./bin/basic-cli"
+    "basic": "dist/index.js"
   },
   "scripts": {
-    "preinstall": "node ./index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc && node -e \"const fs = require('fs'); const path = require('path'); function fixImports(dir) { const files = fs.readdirSync(dir); files.forEach(file => { const filePath = path.join(dir, file); const stat = fs.statSync(filePath); if (stat.isDirectory()) { fixImports(filePath); } else if (file.endsWith('.js')) { let content = fs.readFileSync(filePath, 'utf8'); content = content.replace(/from\\s+['\\\"]\\.\\.?\\/([^'\\\"]*)['\\\"];/g, (match, p1) => { if (p1.includes('.')) return match; return match.replace(p1, p1 + '.js'); }); fs.writeFileSync(filePath, content); } }); } fixImports('dist');\" && npm run bundle",
+    "bundle": "esbuild dist/index.js --bundle --platform=node --outfile=dist/index.js --packages=external --format=esm --allow-overwrite",
+    "dev": "tsx src/index.ts",
+    "dev:watch": "tsx watch src/index.ts",
+    "test": "vitest run --exclude='tests/components/**'",
+    "test:all": "vitest run",
+    "test:components": "vitest run tests/components",
+    "test:watch": "vitest watch --exclude='tests/components/**'",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "changeset:publish": "changeset publish",
+    "changeset:status": "changeset status",
+    "prepublishOnly": "npm run build"
   },
-  "author": "raz@basic.tech",
-  "license": "ISC",
-  "dependencies": {}
+  "dependencies": {
+    "@babel/parser": "^7.27.5",
+    "@babel/types": "^7.27.6",
+    "commander": "^12.1.0",
+    "ink": "^5.0.1",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.4",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@typescript-eslint/parser": "^8.34.0",
+    "@typescript-eslint/types": "^8.34.0",
+    "@vitest/coverage-v8": "^1.6.1",
+    "@vitest/ui": "^1.6.1",
+    "esbuild": "^0.25.5",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^6.3.5",
+    "vitest": "^1.6.1"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts.map",
+    "node_modules/@babel/parser/**/*",
+    "node_modules/@babel/types/**/*"
+  ],
+  "keywords": [
+    "cli",
+    "basic",
+    "database",
+    "development",
+    "schema",
+    "typescript",
+    "react-ink"
+  ],
+  "author": "Basic Team",
+  "license": "MIT",
+  "homepage": "https://basic.tech",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/basicdb/basic-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/basicdb/basic-cli/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
